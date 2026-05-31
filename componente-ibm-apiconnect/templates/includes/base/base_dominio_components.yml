@@ -1,0 +1,36 @@
+include:
+  - local: templates/includes/base/pull_python_scripts_dominio.yml
+  - local: templates/includes/base/pull_config_files_dominio.yml
+
+.download_and_check_dominio: &download_and_check_dominio 
+  - |
+    # Variables base
+    export COMPONENTS_PROJECT_ID="13219" 
+    export BRANCH_REF="${COMPONENTS_REF:-dev}"
+    export BASE_URL="$CI_API_V4_URL/projects/${COMPONENTS_PROJECT_ID}/repository/files/"
+    export HEADER="--header \"PRIVATE-TOKEN:$GITLAB_TOKEN\""    
+    echo "⬇️ Descarga de scripts desde rama: ${BRANCH_REF}"
+    
+    # Función para descargar y verificar
+    download_and_check() {
+      local encoded_path=$1
+      local output_path=$2
+      local url="${BASE_URL}${encoded_path}/raw?ref=${BRANCH_REF}" 
+
+      # Descargar y capturar código HTTP
+      http_code=$(curl -s -w "%{http_code}" -o "$output_path" --header "PRIVATE-TOKEN:$GITLAB_TOKEN" "$url")
+
+      if [ "$http_code" -ne 200 ]; then
+        echo "❌ Error descargando $output_path (HTTP $http_code)"
+        rm -f "$output_path" # Elimina archivo incompleto
+        return 1
+      else
+        echo "✅ Descargado correctamente: $output_path"
+        return 0
+      fi
+    }
+
+.python_dependencies_dominio: &python_dependencies_dominio 
+  - |
+    # Instalar dependencias de python
+    pip3 install requests pyyaml colorama boto3 -qqq

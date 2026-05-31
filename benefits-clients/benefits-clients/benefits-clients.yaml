@@ -1,0 +1,34 @@
+openapi: 3.0.0
+info:
+  title: benefits-clients
+  x-ibm-name: benefits-clients
+  description: Esta API ha sido creada a traves del IDP
+  contact:
+    name: Everyone
+  version: 1.0.0
+x-ibm-configuration:
+  properties:
+    variable-config:
+      value: ""
+      description: "" 
+      encoded: false
+tags:
+- name: benefits-clients
+  description: Esta API ha sido creada a traves del IDP
+paths:
+  /v1/policies:
+    get:
+      tags:
+      - producto-benefits-clients
+      - policy
+      description: Ejemplo..Descripcion
+      operationId: policy 
+      responses:
+        "200": # status code
+          description: Respuesta de la API
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string

@@ -1,0 +1,2 @@
+include:
+  - local: pipeline_api_template.yaml

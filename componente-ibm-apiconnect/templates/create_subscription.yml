@@ -1,0 +1,37 @@
+spec:
+  # Máximo 20 inputs por .yml
+  inputs:
+    # OBLIGATORIOS
+    stage:
+      default: "setup"
+      description: "Stage en la que se ejecutará el componente"
+    job_name:
+      default: "update_issue"
+      description: "Nombre del job que adoptará el componente en el pipeline que lo consuma"
+    #operation:
+    #  default: "update_custom_field"
+    #  description: "Nombre de la operación a ejecutar con el script de python"
+    image_runner:
+      default: ""
+      description: "Imagen docker en la que se usará para levantar el runner en el que se ejecutará el componente"
+    # OPCIONALES
+
+---
+
+include:
+  - local: templates/includes/base/base_dominio_components.yml
+
+$[[ inputs.job_name ]]:
+  stage: $[[ inputs.stage ]]
+  image: $[[ inputs.image_runner ]]
+  before_script:
+    - !reference [.python_dependencies_dominio]
+    - !reference [.download_and_check_dominio]
+    - !reference [.pull_python_scripts_dominio]
+    - !reference [.pull_config_files_dominio]
+  variables:
+    #OPERATION: $[[ inputs.operation ]]
+    COMPONENT_PY: create_subscription
+    CONFIG_FILE: config_files/subscription/varenvironment.yml
+  script: |
+    python python_scripts/$COMPONENT_PY.py

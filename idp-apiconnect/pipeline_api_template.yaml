@@ -1,0 +1,434 @@
+default:
+  tags:
+    - devsecops-common
+  image:
+    name: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/alpine-apic-py:1.1.0
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_MESSAGE =~ /^(test|perf|refactor|style|doc|docs|chore)\b/i
+      when: never
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+      variables:
+        TARGET_BRANCH: "development"
+        envi: "development"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality"
+      variables:
+        TARGET_BRANCH: "quality"
+        envi: "quality"
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"
+      variables:
+        TARGET_BRANCH: "production"
+        envi: "production"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "development"
+      variables:
+        TARGET_BRANCH: "development"
+        envi: "development"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"
+      variables:
+        TARGET_BRANCH: "quality"
+        envi: "quality"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "production"
+      variables:
+        TARGET_BRANCH: "production"
+        envi: "production"
+    - if: ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web") && $ID_STAGE
+    - when: never
+
+variables:
+  GITLAB_TOKEN: $GITLAB_TOKEN
+  QUEUE_PROJECT_ID: "13556"
+  QUEUE_BRANCH: "main"
+  QUEUE_PREFIX: "queue/v1/pending"
+  QUEUE_GITLAB_BASE_URL: $CI_SERVER_URL
+  IMAGE_BASE: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/py3aws:1.0.2-secure
+  COMPONENTS_REF: "main"
+
+  ID_STAGE: ""
+  AUTO_CREATE_CONSUMER_ORG: "false"
+  AUTO_CREATE_APP: "false"
+  FORCE_CREATE_SUBSCRIPTION: "false"
+  envi: "development"
+  TARGET_BRANCH: $envi
+
+  ORGANIZACION: ""
+  CATALOGO: ""
+  APPLICATION: ""
+  CONSUMER_ORG: ""
+  PRODUCT_NAME: ""
+  PRODUCT_VERSION: ""
+  PLAN: ""
+
+  Organizacion: $ORGANIZACION
+  Catalogo: $CATALOGO
+  Consumer_org: $CONSUMER_ORG
+  Nombre: $APPLICATION
+
+include:
+  - project: arq-devops-team/itau-components/itau-compose/automation_jira_gitlab_deploy_qa
+    ref: main
+    file: standard_compose_jobs.yml
+  - component: gitlab.itauchile.cl/arq-devops-team/itau-components/componente-leanxi/factSheets@main
+    inputs:
+      stage: leanix
+      job_name: leanix-enqueue-smoke
+      execution_mode: async
+      operation: smart_create
+      factsheet_name: $CI_PROJECT_NAME
+      project_url: $CI_PROJECT_URL
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/validate_api@$COMPONENTS_REF
+    inputs:
+      stage: Check Product
+      job_name: validate_api
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_consumer_org@$COMPONENTS_REF
+    inputs:
+      stage: Create Consumer Org
+      job_name: create_consumer_org
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_app@$COMPONENTS_REF
+    inputs:
+      stage: Create Application
+      job_name: create_app
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_api@$COMPONENTS_REF
+    inputs:
+      stage: Create API
+      job_name: create_api
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_subscription@$COMPONENTS_REF
+    inputs:
+      stage: Create Subscription
+      job_name: create_subscription
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/rollback_api@$COMPONENTS_REF
+    inputs:
+      stage: options
+      job_name: rollback
+      image_runner: $IMAGE_BASE
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/redeploy_api@$COMPONENTS_REF
+    inputs:
+      stage: options
+      job_name: redeploy
+      image_runner: $IMAGE_BASE
+
+stages:
+  - compliance
+  - HU Validation
+  - Check Product
+  - veracode-prd
+  - HU Sync 1
+  - Create Consumer Org
+  - Create Application
+  - Create API
+  - Create Subscription
+  - HU Sync 2
+  - veracode-devenv
+  - options
+  - leanix
+
+set-env-vars:
+  stage: compliance
+  script:
+    - echo "COMPLIANCE_TECNOLOGY=apiconnect" >> compliance.env
+    - echo "COMPLIANCE_LANGUAGES=openapi" >> compliance.env
+    - echo "COMPLIANCE_PROJECT=$CI_PROJECT_PATH" >> compliance.env
+  artifacts:
+    reports:
+      dotenv: compliance.env
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+
+run-compliance:
+  stage: compliance
+  needs: [set-env-vars]
+  allow_failure: true
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/rule-validation
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  variables:
+    REPO_ID: $CI_PROJECT_ID
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+
+validate_api:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+    - when: never
+
+package-apiconnect-prd:
+  stage: veracode-prd
+  allow_failure: false
+  script:
+    - printenv
+    - echo "[VERACODE] - inicio de proceso"
+    - curl -fSs https://tools.veracode.com/veracode-cli/install | sh && mv veracode ../
+    - export VERACODE_API_KEY_ID=$VERACODE_ID
+    - export VERACODE_API_KEY_SECRET=$VERACODO_SECRET
+    - cd ..
+    - mkdir $CI_PROJECT_NAME-autopack/
+    - set +e
+    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o $CI_PROJECT_NAME-autopack -a --strict 2>&1)
+    - exit_code=$?
+    - set -e
+    - echo $output_veracode
+    - echo $exit_code
+    - ls -1 $CI_PROJECT_NAME-autopack | wc -l
+    - |
+      if [ "$(ls -1 $CI_PROJECT_NAME-autopack | wc -l)" -eq 0 ]; then
+        echo "VERACODE_APP_TYPE=emptyproject" >> build.env
+      else
+        echo "VERACODE_APP_TYPE=application" >> build.env
+      fi
+    - touch $CI_PROJECT_NAME-autopack/$CI_PROJECT_NAME.zip
+    - |
+      PROJECT_VERSION=1.0.0
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
+      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> build.env
+      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> build.env
+      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> build.env
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
+      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> build.env
+      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> build.env
+      echo "ACE12_ARTIFACT=TRUE" >> build.env
+    - cat build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - $CI_PROJECT_NAME-autopack/*.zip
+      - build.env
+    expire_in: 1 hour
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"
+      when: always
+    - when: never
+
+check-artifact-gate-prd:
+  stage: veracode-prd
+  needs:
+    - job: package-apiconnect-prd
+      artifacts: true
+  script:
+    - cat build.env
+    - |
+      if [ "$ACE12_ARTIFACT" != "TRUE" ]; then
+        echo "No artifacts to send. Skipping downstream process."
+        exit 1
+      fi
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"
+      when: always
+    - when: never
+
+send-to-veracode-prd:
+  stage: veracode-prd
+  needs:
+    - job: check-artifact-gate-prd
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  variables:
+    VERACODE_FILEPATH: artifact/$VERACODE_ARTIFACT-autopack/
+    VERACODE_APPNAME_FLAG: appiconnect
+    CI_ARTIFACT_PROJECT_ID: "${CI_PROJECT_ID}"
+    CI_ARTIFACT_PIPELINE_ID: "${CI_PIPELINE_ID}"
+    VERACODE_APP_TYPE: application
+  allow_failure: false
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"
+      when: always
+    - when: never
+
+package-apiconnect-devenv:
+  stage: veracode-devenv
+  allow_failure: true
+  script:
+    - printenv
+    - echo "[VERACODE] - inicio de proceso"
+    - curl -fSs https://tools.veracode.com/veracode-cli/install | sh && mv veracode ../
+    - export VERACODE_API_KEY_ID=$VERACODE_ID
+    - export VERACODE_API_KEY_SECRET=$VERACODO_SECRET
+    - cd ..
+    - mkdir $CI_PROJECT_NAME-autopack/
+    - set +e
+    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o $CI_PROJECT_NAME-autopack -a --strict 2>&1)
+    - exit_code=$?
+    - set -e
+    - echo $output_veracode
+    - echo $exit_code
+    - ls -1 $CI_PROJECT_NAME-autopack | wc -l
+    - |
+      if [ "$(ls -1 $CI_PROJECT_NAME-autopack | wc -l)" -eq 0 ]; then
+        echo "VERACODE_APP_TYPE=emptyproject" >> build.env
+      else
+        echo "VERACODE_APP_TYPE=application" >> build.env
+      fi
+    - touch $CI_PROJECT_NAME-autopack/$CI_PROJECT_NAME.zip
+    - |
+      PROJECT_VERSION=1.0.0
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
+      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> build.env
+      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> build.env
+      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> build.env
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
+      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> build.env
+      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> build.env
+      echo "ACE12_ARTIFACT=TRUE" >> build.env
+    - cat build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - $CI_PROJECT_NAME-autopack/*.zip
+      - build.env
+    expire_in: 1 hour
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "quality"
+      when: always
+    - when: never
+
+check-artifact-gate-devenv:
+  stage: veracode-devenv
+  allow_failure: true
+  needs:
+    - job: package-apiconnect-devenv
+      artifacts: true
+  script:
+    - cat build.env
+    - |
+      if [ "$ACE12_ARTIFACT" != "TRUE" ]; then
+        echo "No artifacts to send. Skipping downstream process."
+        exit 1
+      fi
+  artifacts:
+    reports:
+      dotenv: build.env
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "quality"
+      when: always
+    - when: never
+
+send-to-veracode-devenv:
+  stage: veracode-devenv
+  needs:
+    - job: check-artifact-gate-devenv
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  variables:
+    VERACODE_FILEPATH: artifact/$VERACODE_ARTIFACT-autopack/
+    VERACODE_APPNAME_FLAG: appiconnect
+    CI_ARTIFACT_PROJECT_ID: "${CI_PROJECT_ID}"
+    CI_ARTIFACT_PIPELINE_ID: "${CI_PIPELINE_ID}"
+    VERACODE_APP_TYPE: application
+  allow_failure: true
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development" || $CI_COMMIT_BRANCH == "quality"
+      when: always
+    - when: never
+
+create_consumer_org:
+  variables:
+    Nombre: $CONSUMER_ORG
+  rules:
+    - if: $ID_STAGE == "create_consumer_org" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: $AUTO_CREATE_CONSUMER_ORG == "true" && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - if: $CI_COMMIT_MESSAGE =~ /\[(consumer_flow|create_consumer_org)\]/i && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - when: never
+
+create_app:
+  rules:
+    - if: $ID_STAGE == "create_app" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: $AUTO_CREATE_APP == "true" && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - if: $CI_COMMIT_MESSAGE =~ /\[(consumer_flow|create_app)\]/i && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - when: never
+
+create_api:
+  rules:
+    - if: $ID_STAGE == "create_api" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "production"
+    - when: never
+
+create_subscription:
+  rules:
+    - if: $ID_STAGE == "create_subscription" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: $FORCE_CREATE_SUBSCRIPTION == "true" && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - if: $CI_COMMIT_MESSAGE =~ /\[(create_subscription|subscription_sync)\]/i && (($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "quality"))
+    - when: never
+
+rollback:
+  rules:
+    - if: $ID_STAGE == "rollback" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: ($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "quality" || $CI_COMMIT_BRANCH == "production"))
+      when: manual
+    - when: never
+
+redeploy:
+  rules:
+    - if: $ID_STAGE == "redeploy" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
+    - if: ($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "quality" || $CI_COMMIT_BRANCH == "production"))
+      when: manual
+    - when: never
+
+leanix-enqueue-smoke:
+  stage: leanix
+  when: on_success
+  allow_failure: true
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH =~ /^(development|quality|production)$/
+      when: on_success
+    - when: never
+
+get-hu-key:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+
+validation-hu-key:
+  rules:
+    - if: $HU_KEY_LIST && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"
+      variables:
+        ID_STAGE_FILTER: hu_validation_3
+    - if: $HU_KEY_LIST && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality"
+      variables:
+        ID_STAGE_FILTER: hu_validation_2
+    - if: $HU_KEY_LIST_PROD && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"
+      variables:
+        ID_STAGE_FILTER: hu_validation_4
+
+transition-hu-before-deploy:
+  rules:
+    - if: $HU_KEY_LIST && $CI_COMMIT_BRANCH == "quality"
+
+update-status-deploy-hu:
+  rules:
+    - if: $HU_KEY_LIST && $CI_COMMIT_BRANCH == "quality"
+
+update-status-dev-hu:
+  rules:
+    - if: $HU_KEY_LIST && $CI_COMMIT_BRANCH == "development"
+
+update-veracode-findings-hu:
+  needs:
+    - job: send-to-veracode-prd
+  variables:
+    TRIGGER_JOB_NAME: send-to-veracode-prd
+  rules:
+    - if: $HU_KEY_LIST_PROD && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"

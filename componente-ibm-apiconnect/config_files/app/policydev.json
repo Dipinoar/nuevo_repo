@@ -1,0 +1,13 @@
+{
+    "Version" : "2012-10-17",
+    "Statement" : [ {
+      "Effect" : "Allow",
+      "Principal" : {
+        "AWS" : [ "arn:aws:iam::660372168275:root", "arn:aws:iam::851725243336:root",  "arn:aws:iam::974125096498:root" ]
+      },
+      "Action" : [ "secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret" ],
+      "Resource" : "*"
+    } ]
+  }
+  
+  

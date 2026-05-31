@@ -1,0 +1,31 @@
+spec:
+  inputs:
+    stage:
+      default: "options"
+      description: "Stage en la que se ejecutara el componente"
+    job_name:
+      default: "redeploy"
+      description: "Nombre del job que adoptara el componente en el pipeline que lo consuma"
+    image_runner:
+      default: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/alpine-apic-py:1.1.0"
+      description: "Imagen docker en la que se usara para levantar el runner"
+
+---
+
+include:
+  - local: templates/includes/base/base_dominio_components.yml
+
+$[[ inputs.job_name ]]:
+  stage: $[[ inputs.stage ]]
+  image: $[[ inputs.image_runner ]]
+  before_script:
+    - pip3 install packaging
+    - !reference [.python_dependencies_dominio]
+    - !reference [.download_and_check_dominio]
+    - !reference [.pull_python_scripts_dominio]
+    - !reference [.pull_config_files_dominio]
+  variables:
+    COMPONENT_PY: redeploy_api
+    CONFIG_FILE: config_files/api/varenvironment.yml
+  script: |
+    python python_scripts/$COMPONENT_PY.py

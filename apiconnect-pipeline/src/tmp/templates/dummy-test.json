@@ -1,0 +1,51 @@
+{
+  "jobSteps": [
+    {
+      "state": "NOT_STARTED",
+      "jobStepType": {
+        "workerType": {
+          "lockDuration": 180,
+          "restartClean": true,
+          "resetCaches": true,
+          "repeatDuration": 0,
+          "backoffDuration": 30,
+          "restartAfter": 10,
+          "workerTypeCode": "OPENAPI_IMPORT",
+          "id": 1754
+        },
+        "order": 1,
+        "id": 1854
+      },
+      "id": 0
+    }
+  ],
+  "jobType": {
+    "jobStepTypes": [
+      {
+        "workerType": {
+          "lockDuration": 180,
+          "restartClean": true,
+          "resetCaches": true,
+          "repeatDuration": 0,
+          "backoffDuration": 30,
+          "restartAfter": 10,
+          "workerTypeCode": "OPENAPI_IMPORT",
+          "id": 1754
+        },
+        "order": 1,
+        "id": 1854
+      }
+    ],
+    "name": "REST API",
+    "code": "OPENAPI_IMPORTER",
+    "type": "IMPORT",
+    "description": "Import OpenAPIs individually or in bulk. One time only or sync with a source.",
+    "enabled": true,
+    "metadata": "{\"files\":[{\"purpose\":\"INPUT\",\"filetypesAllowed\":[\"yaml\",\"yml\",\"json\"],\"canUpload\":true,\"canDownload\":true,\"visualStyle\":\"basicFileChooser\",\"removeOnCompleted\":true,\"cardinality\":\"1\",\"storage\":{\"location\":\"VAULT\",\"tag\":\"InputFile\",\"filename\":\"FILENAME\"}},{\"purpose\":\"OUTPUT\",\"filetypesAllowed\":[\"yml\",\"json\"],\"canUpload\":false,\"canDownload\":true,\"visualStyle\":\"basicFileDownload\",\"removeOnCompleted\":false,\"cardinality\":\"1\",\"storage\":{\"location\":\"VAULT\",\"tag\":\"OutputFile\",\"filename\":\"FILENAME\"}},{\"purpose\":\"ERROR\",\"filetypesAllowed\":[\"yml\",\"json\"],\"canUpload\":false,\"canDownload\":true,\"visualStyle\":\"basicFileDownload\",\"removeOnCompleted\":false,\"cardinality\":\"1\",\"storage\":{\"location\":\"VAULT\",\"tag\":\"ErrorFile\",\"filename\":\"FILENAME\"}},{\"purpose\":\"FAIL\",\"filetypesAllowed\":[\"yml\",\"json\"],\"canUpload\":false,\"canDownload\":true,\"visualStyle\":\"basicFileDownload\",\"removeOnCompleted\":false,\"cardinality\":\"1\",\"storage\":{\"location\":\"VAULT\",\"tag\":\"FailedFile\",\"filename\":\"FILENAME\"}}],\"fields\":[{\"label\":\"Owner\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"ownerName\\\" }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"owner\"}},{\"label\":\"Design Owner\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"ownerName\\\" }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"ownerDesign\"}},{\"label\":\"Design GUID\",\"description\":\"Globally Unique Identifier reference to new or exisiting Design\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"guidString\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"designGUID\"}},{\"label\":\"Design Id\",\"description\":\"Globally Unique Identifier reference to new or exisiting Design\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"designId\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"designID\"}},{\"label\":\"Design Extension Mode\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"enum\\\", \\\"values\\\":[\\\"ignore\\\",\\\"useFirst\\\",\\\"useFirstClone\\\",\\\"useLast\\\",\\\"useLastClone\\\",\\\"only\\\",\\\"onlyClone\\\"], \\\"default\\\":\\\"use\\\" }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"designExtensionMode\"}},{\"label\":\"Specification Extension Mode\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"enum\\\", \\\"values\\\":[\\\"ignore\\\",\\\"use\\\",\\\"useClone\\\",\\\"useCloneIfExists\\\"], \\\"default\\\":\\\"useCloneIfExists\\\" }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"specExtensionMode\"}},{\"label\":\"Specification Version Hint\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"enum\\\", \\\"values\\\":[\\\"ignore\\\",\\\"use\\\",\\\"useClone\\\",\\\"useCloneIfExists\\\"] }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"specVersionHint\"}},{\"label\":\"Validation Report\",\"description\":\"Include Validation Report on Error\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"boolean\\\",\\\"default\\\":false }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"boolean\",\"field\":\"includeValidationReportOnError\"}},{\"label\":\"Interface Type\",\"description\":\"\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"interfaceType\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"interfaceType\"}},{\"label\":\"Store Input as Attachment\",\"description\":\"If true then store the OpenAPI file as an attachment on the Specification\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"boolean\\\",\\\"default\\\":true }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"boolean\",\"field\":\"storeInputFile\"}},{\"label\":\"Create endpoint from basepath (OAS2) or server (OAS3)\",\"description\":\"If true then an endpoint will be created from the basepath (OAS2) or server (OAS3) on the Specification\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"boolean\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"boolean\",\"field\":\"createEndpoint\"}},{\"label\":\"Design Type\",\"description\":\"Set the type for the new design\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"designType\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"designType\"}},{\"label\":\"Use Previous Design Id\",\"description\":\"If true then set from previous job output\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"boolean\\\",\\\"default\\\":false }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"boolean\",\"field\":\"usePreviousDesignId\"}},{\"label\":\"Allow Post Process\",\"description\":\"If true then run any PostProcessing Javascript for the JobStep\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"boolean\\\",\\\"default\\\":true }\",\"cardinality\":\"1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"boolean\",\"field\":\"runPostProcess\"}},{\"label\":\"Include Metadata\",\"description\":\"Select optional metadata for PostProcessing\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"JobVaultType\\\",\\\"pattern\\\":\\\"Metadata\\\\_%\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"postMetadata\"}},{\"label\":\"Other Specification Id\",\"description\":\"Primary Key reference to exisiting Specification\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"otherSpecId\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"otherSpecId\"}},{\"label\":\"Other Specification GUID\",\"description\":\"Globally Unique reference to exisiting Specification\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"otherSpecGUID\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"otherSpecGUID\"}},{\"label\":\"Post Javascript\",\"description\":\"Name of Tag containing Javascript if not default\",\"visualStyle\":\"{ \\\"chooser\\\":\\\"JobVaultType\\\",\\\"pattern\\\":\\\"Javascript\\\\_%\\\" }\",\"cardinality\":\"0..1\",\"storage\":{\"location\":\"JOB.CONFIG\",\"type\":\"string\",\"field\":\"postJavascript\"}}]}",
+    "id": 1804
+  },
+  "state": "PAUSED",
+  "owner": "service-account-486240517bd0c8da5ecaa2b0625c7c35",
+  "createdBy": "service-account-486240517bd0c8da5ecaa2b0625c7c35",
+  "id": 0
+}

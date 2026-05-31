@@ -1,0 +1,31 @@
+#
+environment:
+  development:
+    urlmanager: apim.dev.apis.itauchile.cl
+    realm: provider/ldap-service
+    aws_da: 456829521996 #cuenta de devops
+    aws_dr: itau-sts-terraform
+    region: us-east-1
+    secretrefix: APIKey/dev/
+    policyfile: policyqa.json
+    jf-repo: APICONNECT-DEVOPS-DEV
+  quality:
+    urlmanager: apim.sb.apis.itauchile2.cl
+    realm: provider/ldap-services
+    aws_da: 456829521996
+    aws_dr: itau-sts-terraform
+    region: us-east-1
+    secretrefix: APIKey/qa/
+    policyfile: policyqa.json
+    jf-repo: APICONNECT-DEVOPS-QA
+
+  production:
+    urlmanager: ""
+    realm: ""
+    aws_da: 133171776067
+    aws_dr: itau-sts-terraform
+    region: us-east-1
+    secretrefix: ""
+    policyfile: ""
+    jf-repo: ""
+

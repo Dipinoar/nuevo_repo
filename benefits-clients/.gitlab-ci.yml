@@ -1,0 +1,4 @@
+include: 
+- project: 'arq-devops-team/itau-components/itau-compose/idp-apiconnect'
+  ref: 'main'
+  file: 'pipeline_api_template.yaml'

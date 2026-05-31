@@ -1,0 +1,43 @@
+.pull_config_files_dominio: &pull_config_files_dominio
+  - |
+    if [ -n "$CONFIG_FILE" ]; then
+      echo "Descargando archivo de configuración de componente" $COMPONENT_PY
+
+      # Crea directorio
+      mkdir -p config_files
+      mkdir -p config_files/app
+      mkdir -p config_files/subscription
+      mkdir -p config_files/api
+      mkdir -p config_files/consumer_org
+
+      # Archivos adicionales por componente
+      case $COMPONENT_PY in
+        create_app)
+            download_and_check "config_files%2Fapp%2Fvarenvironment.yml" "config_files/app/varenvironment.yml"
+            download_and_check "config_files%2Fapp%2Fpolicydev.json" "config_files/app/policydev.json"
+            download_and_check "config_files%2Fapp%2Fpolicyqa.json" "config_files/app/policyqa.json"
+          ;;
+        create_subscription)
+            download_and_check "config_files%2Fsubscription%2Fvarenvironment.yml" "config_files/subscription/varenvironment.yml"
+          ;;
+        create_api)
+            download_and_check "config_files%2Fapi%2Fvarenvironment.yml" "config_files/api/varenvironment.yml"
+          ;;
+        validate_api)
+            download_and_check "config_files%2Fapi%2Fvarenvironment.yml" "config_files/api/varenvironment.yml"
+          ;;
+        rollback_api)
+            download_and_check "config_files%2Fapi%2Fvarenvironment.yml" "config_files/api/varenvironment.yml"
+          ;;
+        redeploy_api)
+            download_and_check "config_files%2Fapi%2Fvarenvironment.yml" "config_files/api/varenvironment.yml"
+          ;;
+        create_consumer_org)
+            download_and_check "config_files%2Fconsumer_org%2Fvarenvironment.yml" "config_files/consumer_org/varenvironment.yml"
+          ;;
+        # Agregar subdominios según sea necesario
+      esac
+
+      echo "=== Config files ==="
+      ls -lahR config_files/
+    fi

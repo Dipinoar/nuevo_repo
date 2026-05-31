@@ -1,0 +1,81 @@
+.pull_python_scripts_dominio: &pull_python_scripts_dominio
+  - |
+    if [ -n "$COMPONENT_PY" ]; then
+      echo "Descargando scripts de python para componente" $COMPONENT_PY
+
+      # Crea directorios python_scripts y vars si no existen
+      mkdir -p python_scripts
+      mkdir -p python_scripts/vars
+      mkdir -p python_scripts/common
+      download_and_check "src%2Fcommon%2FRepoMetadata.py" "python_scripts/common/RepoMetadata.py"
+
+      # Scripts adicionales por componente
+      case $COMPONENT_PY in
+        create_app)
+            download_and_check "src%2Fapp%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fcommon%2FOutput.py" "python_scripts/common/Output.py"
+            download_and_check "src%2Fapp%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fapp%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fapp%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+          ;;
+        create_subscription)
+            download_and_check "src%2Fsubscription%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fcommon%2FOutput.py" "python_scripts/common/Output.py"
+            download_and_check "src%2Fsubscription%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fsubscription%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fsubscription%2Fvars%2FFunctions.py" "python_scripts/vars/Functions.py"
+            download_and_check "src%2Fsubscription%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+            download_and_check "src%2Fsubscription%2Fvars%2FSetVars.py" "python_scripts/vars/SetVars.py"
+          ;;
+        create_api)
+            download_and_check "src%2Fapi%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fcommon%2FOutput.py" "python_scripts/common/Output.py"
+            download_and_check "src%2Fapi%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FFunctions.py" "python_scripts/vars/Functions.py"
+            download_and_check "src%2Fapi%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+          ;;
+        validate_api)
+            download_and_check "src%2Fapi%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fapi%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FFunctions.py" "python_scripts/vars/Functions.py"
+          ;;
+        rollback_api)
+            download_and_check "src%2Fapi%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fapi%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FFunctions.py" "python_scripts/vars/Functions.py"
+            download_and_check "src%2Fapi%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+          ;;
+        redeploy_api)
+            download_and_check "src%2Fapi%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fapi%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fapi%2Fvars%2FFunctions.py" "python_scripts/vars/Functions.py"
+            download_and_check "src%2Fapi%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+          ;;
+        create_consumer_org)
+            download_and_check "src%2Fconsumer_org%2F"$COMPONENT_PY".py" python_scripts/$COMPONENT_PY.py
+            download_and_check "src%2Fcommon%2FValidation.py" "python_scripts/common/Validation.py"
+            download_and_check "src%2Fcommon%2FOutput.py" "python_scripts/common/Output.py"
+            download_and_check "src%2Fconsumer_org%2Fvars%2FApicrest.py" "python_scripts/vars/Apicrest.py"
+            download_and_check "src%2Fconsumer_org%2Fvars%2FAwsrest.py" "python_scripts/vars/Awsrest.py"
+            download_and_check "src%2Fconsumer_org%2Fvars%2FFormatted.py" "python_scripts/vars/Formatted.py"
+          ;;
+        # Agregar subdominios según sea necesario
+      esac
+
+
+      echo "=== Python scripts ==="
+      ls -lahR python_scripts/
+    fi
+
+
+

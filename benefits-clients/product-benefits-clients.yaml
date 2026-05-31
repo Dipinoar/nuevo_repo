@@ -1,0 +1,44 @@
+info:
+  version: 1.0.0
+  title: benefits-clients
+  name: benefits-clients
+  summary: api summary
+gateways:
+- datapower-api-gateway
+plans:
+  default-plan:
+    title: Plan predeterminado
+    description: Plan predeterminado
+    rate-limits:
+      default:
+        value: 100/1hour
+        hard-limit: true
+    apis:
+      benefits-clients: {}
+apis:
+  benefits-clients:
+    $ref: benefits-clients/benefits-clients.yaml
+visibility:
+  view:
+    type: authenticated
+    orgs: []
+    tags: []
+    enabled: true
+  subscribe:
+    type: authenticated
+    orgs: []
+    tags: []
+    enabled: true
+x-idp:
+  consumer:
+    development:
+      subscriptions:
+        - consumerorg: benefits-clients
+          application: benefits-clients
+          plan: default-plan
+    quality:
+      subscriptions:
+        - consumerorg: benefits-clients
+          application: benefits-clients
+          plan: default-plan
+product: 1.0.0
