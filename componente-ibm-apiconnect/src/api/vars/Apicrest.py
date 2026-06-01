@@ -217,35 +217,95 @@ class Apicrequest:
         return result
     
     def createSubscription(self, subsVars,name=None,version=None):
+        result = self.createSubscriptionDetailed(subsVars, name, version)
+        if result['ok']:
+            print(f"status_code = {result['status_code']}")
+            return result['result']
+        print(f"Error de solicitud: {result['error']}")
+        return None
+
+    def createSubscriptionDetailed(self, subsVars, name=None, version=None):
         if name is not None:
             self.vars['nameProduct'] = name
         if version is not None:
             self.vars['versionProduct'] = version
+
+        plan_name = subsVars.get('plan') or 'default-plan'
+        url = 'https://' + self.vars['urlmanager'] + '/api/apps/' + self.vars['organizacion'] + '/' + self.vars['catalogo'] + '/' + subsVars['consumerorg'] + '/' + subsVars['application'] + "/subscriptions"
+        tokenAccess = self.token
+        headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tokenAccess['access_token']}
+        payload = json.dumps({
+            "product_url": f"https://{self.vars['urlmanager']}/api/catalogs/{self.vars['organizacion']}/{self.vars['catalogo']}/products/{self.vars['nameProduct']}/{self.vars['versionProduct']}",
+            "plan": plan_name
+        })
+
+        response = requests.request("POST", url, headers=headers, data=payload, verify=False)
+        status_code = response.status_code
         try:
-            plan_name = subsVars.get('plan') or 'default-plan'
-            url = 'https://' + self.vars['urlmanager'] + '/api/apps/' + self.vars['organizacion'] + '/' + self.vars['catalogo'] + '/' + subsVars['consumerorg'] + '/' + subsVars['application'] + "/subscriptions"
-            tokenAccess = self.token
-            headers = {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tokenAccess['access_token']}
-            payload = json.dumps({
-                "product_url": f"https://{self.vars['urlmanager']}/api/catalogs/{self.vars['organizacion']}/{self.vars['catalogo']}/products/{self.vars['nameProduct']}/{self.vars['versionProduct']}",
-                "plan": plan_name
-            })
-            #print(f"payload = {json.dumps(payload, indent=4)}")
-            response = requests.request("POST", url, headers=headers, data=payload, verify=False)
-            response.raise_for_status()  # Lanza una excepción si la solicitud no fue exitosa
-            result = response.json()
-            #print(f"list_version_product = {json.dumps(result, indent=4)}")
-            status_code = response.status_code
-            print(f"status_code = {status_code}")
-            return result
-        except requests.exceptions.RequestException as e:
-            # Manejar errores de solicitud (puede ser Timeout, conexión fallida, etc.)
-            print(f"Error de solicitud: {e}")
-            return None  # O maneja el error de alguna otra manera según tu necesidad
-        except json.JSONDecodeError as e:
-            # Manejar errores de decodificación JSON si la respuesta no es válida JSON
-            print(f"Error de decodificación JSON: {e}")
-            return None  # O maneja el error de alguna otra manera según tu necesidad
+            parsed_response = response.json()
+        except ValueError:
+            parsed_response = response.text
+
+        if 200 <= status_code < 300:
+            return {
+                'ok': True,
+                'status_code': status_code,
+                'result': parsed_response,
+                'error': None
+            }
+
+        error_message = parsed_response
+        if isinstance(parsed_response, dict):
+            error_message = parsed_response.get('message') or parsed_response.get('error') or str(parsed_response)
+        return {
+            'ok': False,
+            'status_code': status_code,
+            'result': parsed_response,
+            'error': f"HTTP {status_code}: {error_message}"
+        }
+
+    def ensureConsumerOrgAndApp(self, subsVars):
+        entity_vars = {
+            'urlmanager': self.vars['urlmanager'],
+            'organizacion': self.vars['organizacion'],
+            'catalogo': self.vars['catalogo'],
+            'realm': self.vars['realm'],
+            'consumerOrg': subsVars['consumerorg'],
+            'nombreAPP': subsVars['application'],
+            'tituloAPP': subsVars['application']
+        }
+
+        try:
+            consumer_result = self.getConsumerOrgxName(entity_vars)
+            if not consumer_result.get('check'):
+                print(f"[INFO] Consumer org no existe, creando: {entity_vars['consumerOrg']}")
+                user_data = self.getUserDetail(entity_vars)
+                user_url = user_data.get('url') if isinstance(user_data, dict) else None
+                if not user_url:
+                    return {'ok': False, 'error': 'No se pudo resolver owner_url para crear consumer org'}
+
+                create_consumer_vars = dict(entity_vars)
+                create_consumer_vars['url'] = user_url
+                self.createConsumerOrg(create_consumer_vars)
+
+                # Validar existencia luego del intento de creacion
+                consumer_result = self.getConsumerOrgxName(entity_vars)
+                if not consumer_result.get('check'):
+                    return {'ok': False, 'error': f"No se pudo crear consumer org {entity_vars['consumerOrg']}"}
+
+            app_result = self.getAppDetail(entity_vars)
+            if not app_result.get('check'):
+                print(f"[INFO] App no existe, creando: {entity_vars['nombreAPP']}")
+                self.createApp(entity_vars)
+
+                # Validar existencia luego del intento de creacion
+                app_result = self.getAppDetail(entity_vars)
+                if not app_result.get('check'):
+                    return {'ok': False, 'error': f"No se pudo crear app {entity_vars['nombreAPP']}"}
+
+            return {'ok': True, 'error': None}
+        except Exception as exc:
+            return {'ok': False, 'error': str(exc)}
 
     def updateProductStatus(self, name, version, dataupdate):
         url = 'https://'+self.vars['urlmanager']+'/api/catalogs/'+self.vars['organizacion']+'/'+self.vars['catalogo']+'/products/'+name+'/'+version

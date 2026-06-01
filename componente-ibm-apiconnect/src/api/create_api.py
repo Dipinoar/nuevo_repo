@@ -17,6 +17,20 @@ import re
 import glob
 
 
+def _to_bool(value, default=False):
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
+
+
+def _to_int(value, default=1):
+    try:
+        parsed = int(value)
+        return parsed if parsed >= 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
 def main():
 
     environment = os.environ.get('TARGET_BRANCH') or os.environ.get('envi') or 'development'
@@ -90,6 +104,44 @@ def main():
         'usr_apiconnectv10pipeline')
     apirqs.getToken(loginApi)
     environment = varsDeploy['environment']
+
+    auto_heal_consumer_entities = _to_bool(os.environ.get('AUTO_HEAL_CONSUMER_ENTITIES'), default=False)
+    auto_heal_on_subscription_404 = _to_bool(os.environ.get('AUTO_HEAL_ON_SUBSCRIPTION_404'), default=True)
+    auto_heal_retry_count = _to_int(os.environ.get('AUTO_HEAL_RETRY_COUNT'), default=1)
+    fail_on_subscription_error = _to_bool(os.environ.get('FAIL_ON_SUBSCRIPTION_ERROR'), default=True)
+
+    def apply_subscription(subscription_item):
+        first_try = apirqs.createSubscriptionDetailed(subscription_item)
+        if first_try['ok']:
+            print(f"status_code = {first_try['status_code']}")
+            return True
+
+        print(f"[WARN] Error en suscripcion inicial: {first_try['error']}")
+        status_code = first_try.get('status_code')
+        can_auto_heal = auto_heal_consumer_entities and (
+            (auto_heal_on_subscription_404 and status_code == 404)
+            or (not auto_heal_on_subscription_404)
+        )
+
+        if can_auto_heal:
+            print("[INFO] Intentando autocuracion de consumer org/app por error de suscripcion")
+            heal_result = apirqs.ensureConsumerOrgAndApp(subscription_item)
+            if not heal_result['ok']:
+                print(f"[ERROR] Fallo autocuracion: {heal_result['error']}")
+                return not fail_on_subscription_error
+
+            for attempt in range(1, auto_heal_retry_count + 1):
+                retry_result = apirqs.createSubscriptionDetailed(subscription_item)
+                if retry_result['ok']:
+                    print(f"[OK] Suscripcion creada en reintento {attempt} con status {retry_result['status_code']}")
+                    return True
+                print(f"[WARN] Reintento {attempt} fallido: {retry_result['error']}")
+
+        if fail_on_subscription_error:
+            return False
+
+        print("[WARN] Se ignora error de suscripcion por configuracion")
+        return True
     # Reemplazar archivos de configuración
     process.replaceConfigFiles(environment, directorio_busqueda,varsDeploy)
     listversionproduct = apirqs.getListProduct()
@@ -104,7 +156,9 @@ def main():
                 print("Suscribiendo aplicaciones declaradas en el product yaml")
                 for item in varsSubs['subscription']['environment'][environment]:
                     print(item)
-                    apirqs.createSubscription(item)
+                    if not apply_subscription(item):
+                        print("[ERROR] No fue posible suscribir aplicacion declarada")
+                        sys.exit(1)
         else:
             print("Existe un error al desplegar")
             #sys.exit(1)
@@ -130,7 +184,9 @@ def main():
                 if listSubsMerge is not None:
                     for item in listSubsMerge:
                         print(item)  # Debe mostrar en pantalla si se suscribe correctamente
-                        apirqs.createSubscription(item)
+                        if not apply_subscription(item):
+                            print("[ERROR] No fue posible suscribir aplicacion declarada")
+                            sys.exit(1)
             else:
                 print("Existe un error al desplegar")
                 #sys.exit(1)
@@ -150,7 +206,9 @@ def main():
                 if listSubsMerge is not None:
                     for item in listSubsMerge:
                         print(item)  # Debe mostrar en pantalla si se suscribe correctamente
-                        apirqs.createSubscription(item)
+                        if not apply_subscription(item):
+                            print("[ERROR] No fue posible suscribir aplicacion declarada")
+                            sys.exit(1)
 
             else:
                 print("Existe un error al desplegar")

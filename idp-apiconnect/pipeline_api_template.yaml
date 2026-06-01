@@ -48,6 +48,10 @@ variables:
   AUTO_CREATE_CONSUMER_ORG: "false"
   AUTO_CREATE_APP: "false"
   FORCE_CREATE_SUBSCRIPTION: "false"
+  AUTO_HEAL_CONSUMER_ENTITIES: "false"
+  AUTO_HEAL_ON_SUBSCRIPTION_404: "true"
+  AUTO_HEAL_RETRY_COUNT: "1"
+  FAIL_ON_SUBSCRIPTION_ERROR: "true"
   envi: "development"
   TARGET_BRANCH: $envi
 
@@ -379,6 +383,7 @@ rollback:
     - if: $ID_STAGE == "rollback" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
     - if: ($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "quality" || $CI_COMMIT_BRANCH == "production"))
       when: manual
+      allow_failure: true
     - when: never
 
 redeploy:
@@ -386,6 +391,7 @@ redeploy:
     - if: $ID_STAGE == "redeploy" && ($CI_PIPELINE_SOURCE == "trigger" || $CI_PIPELINE_SOURCE == "web")
     - if: ($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development") || ($CI_PIPELINE_SOURCE == "push" && ($CI_COMMIT_BRANCH == "quality" || $CI_COMMIT_BRANCH == "production"))
       when: manual
+      allow_failure: true
     - when: never
 
 leanix-enqueue-smoke:
