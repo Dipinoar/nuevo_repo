@@ -41,7 +41,7 @@ variables:
   QUEUE_BRANCH: "main"
   QUEUE_PREFIX: "queue/v1/pending"
   QUEUE_GITLAB_BASE_URL: $CI_SERVER_URL
-  IMAGE_BASE: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/py3aws:1.0.2-secure
+  IMAGE_BASE: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/alpine-apic-py:1.1.0
   COMPONENTS_REF: "dev-homologate"
 
   ID_STAGE: ""
