@@ -42,7 +42,7 @@ variables:
   QUEUE_PREFIX: "queue/v1/pending"
   QUEUE_GITLAB_BASE_URL: $CI_SERVER_URL
   IMAGE_BASE: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/py3aws:1.0.2-secure
-  COMPONENTS_REF: "main"
+  COMPONENTS_REF: "dev-homologate"
 
   ID_STAGE: ""
   AUTO_CREATE_CONSUMER_ORG: "false"
@@ -76,37 +76,37 @@ include:
       operation: smart_create
       factsheet_name: $CI_PROJECT_NAME
       project_url: $CI_PROJECT_URL
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/validate_api@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/validate_api@dev-homologate
     inputs:
       stage: Check Product
       job_name: validate_api
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_consumer_org@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_consumer_org@dev-homologate
     inputs:
       stage: Create Consumer Org
       job_name: create_consumer_org
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_app@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_app@dev-homologate
     inputs:
       stage: Create Application
       job_name: create_app
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_api@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_api@dev-homologate
     inputs:
       stage: Create API
       job_name: create_api
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_subscription@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/create_subscription@dev-homologate
     inputs:
       stage: Create Subscription
       job_name: create_subscription
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/rollback_api@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/rollback_api@dev-homologate
     inputs:
       stage: options
       job_name: rollback
       image_runner: $IMAGE_BASE
-  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/redeploy_api@$COMPONENTS_REF
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-ibm-apiconnect/redeploy_api@dev-homologate
     inputs:
       stage: options
       job_name: redeploy
