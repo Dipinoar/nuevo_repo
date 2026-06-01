@@ -16,6 +16,7 @@
             download_and_check "config_files%2Fapp%2Fvarenvironment.yml" "config_files/app/varenvironment.yml"
             download_and_check "config_files%2Fapp%2Fpolicydev.json" "config_files/app/policydev.json"
             download_and_check "config_files%2Fapp%2Fpolicyqa.json" "config_files/app/policyqa.json"
+            download_and_check "config_files%2Fapp%2Fpolicyprod.json" "config_files/app/policyprod.json"
           ;;
         create_subscription)
             download_and_check "config_files%2Fsubscription%2Fvarenvironment.yml" "config_files/subscription/varenvironment.yml"

@@ -20,12 +20,12 @@ environment:
     jf-repo: APICONNECT-DEVOPS-QA
 
   production:
-    urlmanager: ""
-    realm: ""
+    urlmanager: apim.apis.itauchile.cl
+    realm: provider/ldap-service
     aws_da: 133171776067
     aws_dr: itau-sts-terraform
     region: us-east-1
-    secretrefix: ""
-    policyfile: ""
-    jf-repo: ""
+    secretrefix: APIKey/prod/
+    policyfile: policyprod.json
+    jf-repo: APICONNECT-DEVOPS-PROD
 
