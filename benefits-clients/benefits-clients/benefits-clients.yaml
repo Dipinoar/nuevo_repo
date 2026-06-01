@@ -7,6 +7,7 @@ info:
     name: Everyone
   version: 1.0.0
 x-ibm-configuration:
+  gateway: datapower-api-gateway
   properties:
     variable-config:
       value: ""
