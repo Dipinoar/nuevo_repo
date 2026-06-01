@@ -174,32 +174,34 @@ package-apiconnect-prd:
     - export VERACODE_API_KEY_ID=$VERACODE_ID
     - export VERACODE_API_KEY_SECRET=$VERACODO_SECRET
     - cd ..
-    - mkdir $CI_PROJECT_NAME-autopack/
+    - export VERACODE_OUTPUT_DIR="$CI_PROJECT_DIR/$CI_PROJECT_NAME-autopack"
+    - export BUILD_ENV_PATH="$CI_PROJECT_DIR/build.env"
+    - mkdir -p "$VERACODE_OUTPUT_DIR"
     - set +e
-    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o $CI_PROJECT_NAME-autopack -a --strict 2>&1)
+    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o "$VERACODE_OUTPUT_DIR" -a --strict 2>&1)
     - exit_code=$?
     - set -e
     - echo $output_veracode
     - echo $exit_code
-    - ls -1 $CI_PROJECT_NAME-autopack | wc -l
+    - ls -1 "$VERACODE_OUTPUT_DIR" | wc -l
     - |
-      if [ "$(ls -1 $CI_PROJECT_NAME-autopack | wc -l)" -eq 0 ]; then
-        echo "VERACODE_APP_TYPE=emptyproject" >> build.env
+      if [ "$(ls -1 "$VERACODE_OUTPUT_DIR" | wc -l)" -eq 0 ]; then
+        echo "VERACODE_APP_TYPE=emptyproject" >> "$BUILD_ENV_PATH"
       else
-        echo "VERACODE_APP_TYPE=application" >> build.env
+        echo "VERACODE_APP_TYPE=application" >> "$BUILD_ENV_PATH"
       fi
-    - touch $CI_PROJECT_NAME-autopack/$CI_PROJECT_NAME.zip
+    - touch "$VERACODE_OUTPUT_DIR/$CI_PROJECT_NAME.zip"
     - |
       PROJECT_VERSION=1.0.0
-      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
-      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> build.env
-      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> build.env
-      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> build.env
-      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
-      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> build.env
-      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> build.env
-      echo "ACE12_ARTIFACT=TRUE" >> build.env
-    - cat build.env
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> "$BUILD_ENV_PATH"
+      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> "$BUILD_ENV_PATH"
+      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> "$BUILD_ENV_PATH"
+      echo "ACE12_ARTIFACT=TRUE" >> "$BUILD_ENV_PATH"
+    - cat "$BUILD_ENV_PATH"
   artifacts:
     reports:
       dotenv: build.env
@@ -265,32 +267,34 @@ package-apiconnect-devenv:
     - export VERACODE_API_KEY_ID=$VERACODE_ID
     - export VERACODE_API_KEY_SECRET=$VERACODO_SECRET
     - cd ..
-    - mkdir $CI_PROJECT_NAME-autopack/
+    - export VERACODE_OUTPUT_DIR="$CI_PROJECT_DIR/$CI_PROJECT_NAME-autopack"
+    - export BUILD_ENV_PATH="$CI_PROJECT_DIR/build.env"
+    - mkdir -p "$VERACODE_OUTPUT_DIR"
     - set +e
-    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o $CI_PROJECT_NAME-autopack -a --strict 2>&1)
+    - output_veracode=$(./veracode package -s $CI_PROJECT_NAME -t directory -o "$VERACODE_OUTPUT_DIR" -a --strict 2>&1)
     - exit_code=$?
     - set -e
     - echo $output_veracode
     - echo $exit_code
-    - ls -1 $CI_PROJECT_NAME-autopack | wc -l
+    - ls -1 "$VERACODE_OUTPUT_DIR" | wc -l
     - |
-      if [ "$(ls -1 $CI_PROJECT_NAME-autopack | wc -l)" -eq 0 ]; then
-        echo "VERACODE_APP_TYPE=emptyproject" >> build.env
+      if [ "$(ls -1 "$VERACODE_OUTPUT_DIR" | wc -l)" -eq 0 ]; then
+        echo "VERACODE_APP_TYPE=emptyproject" >> "$BUILD_ENV_PATH"
       else
-        echo "VERACODE_APP_TYPE=application" >> build.env
+        echo "VERACODE_APP_TYPE=application" >> "$BUILD_ENV_PATH"
       fi
-    - touch $CI_PROJECT_NAME-autopack/$CI_PROJECT_NAME.zip
+    - touch "$VERACODE_OUTPUT_DIR/$CI_PROJECT_NAME.zip"
     - |
       PROJECT_VERSION=1.0.0
-      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
-      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> build.env
-      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> build.env
-      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> build.env
-      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
-      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> build.env
-      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> build.env
-      echo "ACE12_ARTIFACT=TRUE" >> build.env
-    - cat build.env
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> "$BUILD_ENV_PATH"
+      echo "CI_ARTIFACT_PROJECT_SOURCE=apiconnect" >> "$BUILD_ENV_PATH"
+      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_APPNAME=$CI_PROJECT_PATH" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_MODO_WARNING=$VERACODE_MODO_WARNING" >> "$BUILD_ENV_PATH"
+      echo "VERACODE_APP_NAMESPACE=$CI_PROJECT_NAMESPACE" >> "$BUILD_ENV_PATH"
+      echo "ACE12_ARTIFACT=TRUE" >> "$BUILD_ENV_PATH"
+    - cat "$BUILD_ENV_PATH"
   artifacts:
     reports:
       dotenv: build.env
