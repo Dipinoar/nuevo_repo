@@ -1,0 +1,24 @@
+# Detekt static analysis
+.gradle_detekt_test: &gradle_detekt_test
+  script:
+    - |
+      echo ">>> [STEP 1] Exporting environment variables and configuring Android SDK..."
+      export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+      . /etc/profile.d/gradle.sh
+      echo ">>> [STEP 2] Starting Detekt static analysis..."
+      gradle detekt --info -PmavenUser=$ANDROID_MAVEN_PULL_USER -PmavenPassword=$ANDROID_MAVEN_PULL_USER_TOKEN | tee test.txt
+      echo ">>> [STEP 3] Validating Detekt execution result..."
+      test_ok=$(cat test.txt | grep -e "BUILD SUCCESSFUL" | wc -l)
+      if [ $test_ok -gt 0 ]; then
+        echo "--------------------------------"
+        echo "✅ Detekt analysis completed successfully."
+        echo "Summary: APKs have been tested."
+        echo "--------------------------------"
+        tail -28 test.txt | head -19
+      else
+        echo "--------------------------------"
+        echo "❌ Build failed during Detekt analysis."
+        echo "Please check the 'test.txt' artifact for full details."
+        echo "--------------------------------"
+        exit 1
+      fi

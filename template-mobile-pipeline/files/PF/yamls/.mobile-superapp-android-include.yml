@@ -1,0 +1,251 @@
+include:
+  # ======================================================
+  # LOCAL
+  # ======================================================
+  - local: 'files/PF/yamls/.mobile-superapp-android-variables.yml'
+  - local: 'files/PF/yamls/.mobile-superapp-android-workflow.yml'
+
+  # ======================================================
+  # SHARED
+  # ======================================================
+  - local: 'files/shared/calculate_version.yml'
+  - local: 'files/shared/check_rebase.yml'
+  - local: 'files/shared/reusable_commands.yml'
+  - local: 'files/shared/rules_components.yml'
+
+  # ======================================================
+  # PF ANCHORS
+  # ======================================================
+  - local: 'files/PF/anchors/comment_summary.yml'
+  - local: 'files/PF/anchors/deploy_google_play.yml'
+  - local: 'files/PF/anchors/download_pf_scripts.yml'
+  - local: 'files/PF/anchors/firebase_upload.yml'
+  - local: 'files/PF/anchors/get_version_code.yml'
+  - local: 'files/PF/anchors/gradle_test.yml'
+  - local: 'files/PF/anchors/prepare_keystore.yml'
+  - local: 'files/PF/anchors/prepare_remote.yml'
+  - local: 'files/PF/anchors/resolve_env_files.yml'
+  - local: 'files/PF/anchors/retrieve_secrets.yml'
+  - local: 'files/PF/anchors/retrieve_signing_keys.yml'
+  - local: 'files/PF/anchors/run_parametrized_builds.yml'
+  - local: 'files/PF/anchors/fastlane_build_aab.yml'
+  - local: 'files/PF/anchors/hotfix_semantic_version.yml'
+  - local: 'files/PF/anchors/veracode_prepare.yml'
+  - local: 'files/PF/anchors/set_java_version.yml'
+  - local: 'files/PF/anchors/setup_android_linux_env.yml'
+  - local: 'files/PF/anchors/download_cacerts.yml'
+  - local: 'files/PF/anchors/superapp_android_runtime_compat.yml'
+  - local: 'files/PF/anchors/guardsquare.yml'
+
+  # ======================================================
+  # 📦 UPLOAD DEV
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 6.1 Upload DEV to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*development*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${DEV_PREFIX}"
+      rules:
+        - if: $BUILD_DEV == "false"
+          when: never
+        - if: $MAKE_REBASE == "true"
+          when: never
+        - !reference [.rules_mr_feature_bugfix_to_development, rules]
+      retry_max: 2
+
+  # ======================================================
+  # 📦 UPLOAD QA
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 6.2 Upload QA to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*quality*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${QA_PREFIX}"
+      rules:
+        - if: $MAKE_REBASE == "true"
+          when: never
+        - !reference [.rules_mr_feature_bugfix_to_development, rules]
+        - !reference [.rules_mr_development_to_quality, rules]
+        - !reference [.rules_mr_hotfix_to_quality, rules]
+      retry_max: 2
+
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 6.5 Upload QA AAB to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*quality*.aab"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${QA_PREFIX}"
+      rules:
+        - if: $MAKE_REBASE == "true"
+          when: never
+        - !reference [.rules_mr_development_to_quality, rules]
+        - !reference [.rules_mr_hotfix_to_quality, rules]
+      retry_max: 2
+
+  # ======================================================
+  # 🔐 GUARDSQUARE QA
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 6.7 Upload QA Instrumented to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${QA_PREFIX}-instrumented"
+      rules:
+        - if: $MAKE_REBASE == "true"
+          when: never
+        - !reference [.rules_instrumented_to_development, rules]
+        - !reference [.rules_instrumented_hotfix_to_quality, rules]
+        - !reference [.rules_instrumented_to_quality, rules]
+      retry_max: 2
+
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 6.8 Upload QA Protected to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*.aab"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${QA_PREFIX}-protected"
+      rules:
+        - if: $MAKE_REBASE == "true"
+          when: never
+        - !reference [.rules_protected_to_development, rules]
+        - !reference [.rules_protected_hotfix_to_quality, rules]
+        - !reference [.rules_protected_to_quality, rules]
+      retry_max: 2
+
+  # ======================================================
+  # 📦 UPLOAD PROD
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.1 Upload PROD to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*production*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${APP_VERSION}${PROD_PREFIX}"
+      rules:
+        - !reference [.rules_mr_quality_to_production, rules]
+      retry_max: 2
+
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.4 Upload PROD AAB to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*production*.aab"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${APP_VERSION}${PROD_PREFIX}"
+      rules:
+        - !reference [.rules_mr_quality_to_production, rules]
+      retry_max: 2
+
+  # ======================================================
+  # 🔐 GUARDSQUARE PROD
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.6 Upload PROD Instrumented to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${APP_VERSION}${PROD_PREFIX}-instrumented"
+      rules:
+        - !reference [.rules_instrumented_to_production, rules]
+      retry_max: 2
+
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.7 Upload PROD Protected to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*.aab"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${APP_VERSION}${PROD_PREFIX}-protected"
+      rules:
+        - !reference [.rules_protected_to_production, rules]
+      retry_max: 2
+
+  # ======================================================
+  # 📦 PROD UNOFFICIAL
+  # ======================================================
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.5 Upload PROD AAB Unofficial to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*production*.aab"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${PROD_PREFIX}${UNOFFICIAL_PREFIX}"
+      rules:
+        - !reference [.rules_mr_unofficial_to_production, rules]
+      retry_max: 2
+
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload_prod
+      job_name: 9.2 Upload PROD Unofficial to Package Registry
+      target_project_id: ${PACKAGE_REGISTRY_ID}
+      image: $RUNNER_ANDROID_IMAGE
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*production*unofficial*.apk"
+      base_directory: "${RELEASE_PATH}"
+      package_name: "${CI_PROJECT_NAME}"
+      package_version: "${BASE_VERSION}${PROD_PREFIX}${UNOFFICIAL_PREFIX}"
+      rules:
+        - !reference [.rules_mr_unofficial_to_production, rules]
+      retry_max: 2

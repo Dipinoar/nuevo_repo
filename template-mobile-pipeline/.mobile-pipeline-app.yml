@@ -1,0 +1,794 @@
+# PJ Android Pipeline App
+# v2.0 - Android Only (Linux runners) - Modularizado
+
+default:
+  tags:
+    - ec2-android
+  image: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:1.0.0-secure"
+  cache:
+    paths:
+      - .gradle/wrapper
+
+stages:
+  - compliance
+  - prepare_pipeline
+  - calculate_version
+  - test
+  - build
+  - veracode
+  - deploy
+  - summary
+  - special_builds
+
+include:
+  - local: 'files/PJ/yamls/.mobile-pipeline-include.yml'
+
+#========================== PIPELINE JOBS ============================
+
+# ======================================================================
+# STAGE: compliance
+# ======================================================================
+1.1 Setting Compliance Variables:
+  stage: compliance
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  script:
+    - echo "COMPLIANCE_TECNOLOGY=mobile" >> compliance.env
+    - echo "COMPLIANCE_LANGUAGES=$CI_PROJECT_REPOSITORY_LANGUAGES" >> compliance.env
+    - echo "COMPLIANCE_PROJECT=$CI_PROJECT_PATH" >> compliance.env
+  artifacts:
+    reports:
+      dotenv: compliance.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - when: always
+
+1.2 Validate Compliance:
+  stage: compliance
+  needs: [1.1 Setting Compliance Variables]
+  variables:
+    REPO_ID: $CI_PROJECT_ID
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/rule-validation
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - when: always
+
+# ======================================================================
+# STAGE: prepare_pipeline
+# ======================================================================
+2.1 No Protected Target Environment:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  variables:
+    MESSAGE: >
+      This merge request targets a non-protected environment (*${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*).<br>
+      Please ensure merges follow the authorized flow: *feature/bugfix → development → quality → production*.
+  script:
+    - !reference [.current_dir, script]
+    - printenv
+    - !reference [.create_directory, script]
+    - !reference [.downloads_utils_dependency, script]
+    - !reference [.downloads_comment_dependency, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - !reference [.return_to_pipeline_dir, script]
+    - !reference [.comment_to_mr, script]
+  rules:
+    - if: $MERGE_REQUEST_NOT_PROTECTED == "true"
+    - when: never
+
+2.2 Blocked Merge Request:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  interruptible: false
+  variables:
+    MESSAGE: >
+      This merge request has been blocked due to unauthorized source/target combination:<br>
+      *${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}* → *${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*.<br>
+      Only merges from *feature/bugfix* to *development*, *development* to *quality* and from *quality* to *production* are allowed.
+  script:
+    - !reference [.current_dir, script]
+    - printenv
+    - !reference [.create_directory, script]
+    - !reference [.downloads_utils_dependency, script]
+    - !reference [.downloads_comment_dependency, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - !reference [.return_to_pipeline_dir, script]
+    - !reference [.comment_to_mr, script]
+    - exit 1
+  rules:
+    - if: $MERGE_REQUEST_BLOCKED == "true"
+    - when: never
+
+2.3 Check Rebase Status:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  script:
+    - !reference [.comment_mr_function, script]
+    - !reference [.validate_env_vars, script]
+    - !reference [.get_info_mr, script]
+    - !reference [.verify_conflicts, script]
+    - !reference [.verify_behind_commits, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+2.4 Prepare Environment:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  needs:
+    - job: 2.3 Check Rebase Status
+      optional: true
+  script:
+    - !reference [.prepare_pj_environment, script]
+    - printenv
+  artifacts:
+    access: none
+    paths:
+      - build.development.env
+      - build.quality.env
+      - build.production.env
+    reports:
+      dotenv: build.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_commit_quality, rules]
+    - !reference [.rules_commit_production, rules]
+
+2.5 Retrieve Artifacts:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  needs: [2.4 Prepare Environment]
+  script:
+    - !reference [.retrieve_pj_artifacts, script]
+  artifacts:
+    name: "Dependencies"
+    untracked: true
+    access: none
+    exclude:
+      - "$PIPELINE_LOCAL_SCRIPTS_FOLDER/**/*"
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_commit_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_commit_production, rules]
+
+2.6 Retrieve Secrets:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  tags:
+    - devsecops-common
+  needs: [2.4 Prepare Environment]
+  before_script:
+    - !reference [.set_environment_variables, before_script]
+  script:
+    - !reference [.retrieve_pj_secrets, script]
+  artifacts:
+    name: "Secrets"
+    untracked: true
+    access: none
+    exclude:
+      - "$PIPELINE_LOCAL_SCRIPTS_FOLDER/**/*"
+    reports:
+      dotenv: secrets.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    # On feature/bugfix → development MRs, also fetch QA secrets so 5.2 Build QA
+    # can sign in the same pipeline run.
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+      variables:
+        ADDITIONAL_RETRIEVE_ENV_SUFFIXES: "_QUALITY"
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_commit_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_commit_production, rules]
+
+# ======================================================================
+# STAGE: calculate_version
+# ======================================================================
+3.1 Calculate Beta Version:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_DEFAULT_IMAGE_SECURE
+  needs:
+    - job: 2.4 Prepare Environment
+  before_script:
+    - !reference [.git_auth, before_script]
+    - git fetch --all --tags --prune --quiet
+  script:
+    - !reference [.check_beta_number, script]
+    - !reference [.get_tag_source_branch, script]
+    - !reference [.get_available_tags, script]
+    - !reference [.get_max_beta_number, script]
+    - !reference [.calculate_beta_plus_one, script]
+    - !reference [.create_artifacts, script]
+    - !reference [.export_to_env, script]
+  after_script:
+    - !reference [.latest_verification, script]
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - when: never
+
+3.2 Simulate Semantic Release:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_NODE_SECURE
+  needs:
+    - job: 3.1 Calculate Beta Version
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git-core ca-certificates
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.downloads_deploytestrc_dependency, script]
+    - |
+      echo "[INFO!] Simulate Semantic Release"
+      OUTPUT=$(semantic-release --dry-run --no-ci --branches "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")
+      echo "$OUTPUT"
+      echo "[INFO!] Simulate Semantic Release for this commit"
+      VERSION=$(echo $OUTPUT | grep -o "he next release version is [0-9]*\.[0-9]*\.[0-9]*" | awk '{print $6}')
+      echo "[INFO!] Simulated semantic version: ${VERSION:-<none>}"
+      echo "[INFO!] Beta version (authoritative) from 3.1: ${APP_VERSION:-<none>}"
+      echo "SEMANTIC_VERSION=${VERSION}" >> .semantic_version_env
+      cat .semantic_version_env
+  artifacts:
+    reports:
+      dotenv: .semantic_version_env
+  rules:
+    - !reference [.rules_mr_to_development, rules]
+
+3.3 Get Version:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_NODE_SECURE
+  script:
+    - |
+      git fetch --tags
+      if [[ -n "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" ]]; then
+        VERSION=$(git tag --list 'v*' --sort=-v:refname --merged "origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" | head -n 1 | cut -d 'v' -f2)
+      else
+        VERSION=$(git tag --contains $(git rev-parse --short HEAD) | cut -d 'v' -f2 | head -n 1)
+      fi
+      if [[ $VERSION == "" ]]; then
+        echo "[ERROR!] No version has been defined for this commit."
+        exit 1
+      fi
+    - |
+      echo "APP_VERSION=${VERSION}"
+      echo APP_VERSION=$VERSION >> .app_version_env
+    - cat .app_version_env
+  artifacts:
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_commit_quality, rules]
+    - !reference [.rules_commit_production, rules]
+
+3.4 Semantic Release:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_NODE_SECURE
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends git-core ca-certificates
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.downloads_releaserc_dependency, script]
+    - |
+      semantic-release
+      cat .app_version_env
+  artifacts:
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_commit_development, rules]
+
+3.5 Version Promotion Summary:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_SECURE
+  needs:
+    - job: 3.2 Simulate Semantic Release
+      optional: true
+    - job: 3.4 Semantic Release
+      optional: true
+  script:
+    - !reference [.version_promotion_summary, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: test
+# ======================================================================
+4.1 Test:
+  stage: test
+  allow_failure: true
+  needs:
+    - job: 2.4 Prepare Environment
+    - job: 2.5 Retrieve Artifacts
+    - job: 2.6 Retrieve Secrets
+  before_script:
+    - !reference [.set_environment_variables, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.download_cacerts, before_script]
+  script:
+    - !reference [.gradle_detekt_test, script]
+  artifacts:
+    paths:
+      - test.txt
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: build
+# ======================================================================
+5.1 Build DEV:
+  stage: build
+  needs:
+    - job: 2.3 Check Rebase Status
+      optional: true
+    - job: 2.4 Prepare Environment
+    - job: 2.5 Retrieve Artifacts
+    - job: 2.6 Retrieve Secrets
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.2 Simulate Semantic Release
+      optional: true
+    - job: 3.3 Get Version
+      optional: true
+    - job: 3.4 Semantic Release
+      optional: true
+    - job: 4.1 Test
+  variables:
+    TARGET_BRANCH: "development"
+    BUILD_ENV_SUFFIX: "_DEVELOPMENT"
+    RELEASE_SUBDIR: "development"
+  before_script:
+    - !reference [.before_android, before_script]
+    - !reference [.set_environment_variables, before_script]
+    - !reference [.set_java_version, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.download_cacerts, before_script]
+    - !reference [.ensure_android_sdk, script]
+  script:
+    - !reference [.prebuild_android_application, script]
+    - !reference [.init_ssh_agent_guardsquare, script]
+    - !reference [.build_and_publish_sequential, script]
+    - !reference [.run_pj_build, script]
+    - !reference [.copy_gradle_module_metadata, script]
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  artifacts:
+    paths:
+      - dwtoveracode/development/*
+      - ${RELEASE_DIRECTORY}/development/*
+  rules:
+    - if: $BUILD_DEV == "false"
+      when: never
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - when: never
+
+5.2 Build QA:
+  stage: build
+  needs:
+    - job: 2.3 Check Rebase Status
+      optional: true
+    - job: 2.4 Prepare Environment
+    - job: 2.5 Retrieve Artifacts
+    - job: 2.6 Retrieve Secrets
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.2 Simulate Semantic Release
+      optional: true
+    - job: 3.3 Get Version
+      optional: true
+    - job: 3.4 Semantic Release
+      optional: true
+    - job: 4.1 Test
+  variables:
+    TARGET_BRANCH: "quality"
+    BUILD_ENV_SUFFIX: "_QUALITY"
+    RELEASE_SUBDIR: "quality"
+  before_script:
+    - !reference [.before_android, before_script]
+    - !reference [.set_environment_variables, before_script]
+    - !reference [.set_java_version, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.download_cacerts, before_script]
+    - !reference [.ensure_android_sdk, script]
+  script:
+    - !reference [.prebuild_android_application, script]
+    - !reference [.init_ssh_agent_guardsquare, script]
+    - !reference [.build_and_publish_sequential, script]
+    - !reference [.run_pj_build, script]
+    - !reference [.copy_gradle_module_metadata, script]
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  artifacts:
+    paths:
+      - dwtoveracode/quality/*
+      - ${RELEASE_DIRECTORY}/quality/*
+    reports:
+      dotenv: build.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: veracode
+# ======================================================================
+6.1 Generate Binaries for Veracode:
+  stage: veracode
+  needs:
+    - job: 2.4 Prepare Environment
+    - job: 5.1 Build DEV
+      optional: true
+    - job: 5.2 Build QA
+      optional: true
+  script:
+    - !reference [.prepare_pj_veracode, script]
+  artifacts:
+    paths:
+      - dwtoveracode/*
+    reports:
+      dotenv: build.env
+  rules:
+    - if: '$veracodeoff == "true"'
+      when: never
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+6.2 Send to Veracode:
+  stage: veracode
+  needs:
+    - job: 6.1 Generate Binaries for Veracode
+      optional: true
+  variables:
+    VERACODE_FILEPATH: artifact/dwtoveracode/
+    CI_ARTIFACT_PROJECT_ID: "${CI_PROJECT_ID}"
+    CI_ARTIFACT_PIPELINE_ID: "${CI_PIPELINE_ID}"
+    CI_ARTIFACT_JOB_ID: "${CI_JOB_ID}"
+    VERACODE_TEAMS: "superapp ITAUCL"
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - if: '$veracodeoff == "true"'
+      when: never
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: never
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: deploy (pre-merge only — publishes pre-merge build artifacts)
+# ======================================================================
+7.1 Publish to Package Registry DEV:
+  stage: deploy
+  image: $RUNNER_ANDROID_SECURE
+  needs:
+    - job: 2.4 Prepare Environment
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.2 Simulate Semantic Release
+      optional: true
+    - job: 5.1 Build DEV
+      optional: true
+  variables:
+    TARGET_BRANCH: "development"
+    BUILD_ENV_SUFFIX: "_DEVELOPMENT"
+    RELEASE_SUBDIR: "development"
+  before_script:
+    - !reference [.set_environment_variables, before_script]
+  script:
+    - |
+      if [[ "$PIPELINE_PROJECT_TYPE" == "library" ]]; then
+        echo "[INFO] Library projects publish during pre-merge build. Skipping."
+        exit 0
+      fi
+    - |
+      # Publish DEV under BASE_VERSION (e.g. 1.1.7) instead of APP_VERSION (e.g. 1.1.7b7).
+      # .upload_application uses ${APP_VERSION}${PACKAGES_MAVEN_URL_SUFFIX} as the package
+      # version, so override APP_VERSION here to reuse the shared anchor unchanged.
+      if [[ -n "${BASE_VERSION:-}" ]]; then
+        echo "[INFO] Overriding APP_VERSION ('${APP_VERSION:-}') with BASE_VERSION ('${BASE_VERSION}') for DEV publish"
+        export APP_VERSION="${BASE_VERSION}"
+      else
+        echo "[WARN] BASE_VERSION is not set; keeping APP_VERSION='${APP_VERSION:-}'"
+      fi
+    - !reference [.publish_pj_to_registry, script]
+  rules:
+    - if: $BUILD_DEV == "false"
+      when: never
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - when: never
+
+7.2 Publish to Package Registry QA:
+  stage: deploy
+  image: $RUNNER_ANDROID_SECURE
+  needs:
+    - job: 2.4 Prepare Environment
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.2 Simulate Semantic Release
+      optional: true
+    - job: 3.3 Get Version
+      optional: true
+    - job: 5.2 Build QA
+      optional: true
+    - job: 6.1 Publish to Package Registry DEV
+      optional: true
+  variables:
+    TARGET_BRANCH: "quality"
+    BUILD_ENV_SUFFIX: "_QUALITY"
+    RELEASE_SUBDIR: "quality"
+  before_script:
+    - !reference [.set_environment_variables, before_script]
+  script:
+    - |
+      if [[ "$PIPELINE_PROJECT_TYPE" == "library" ]]; then
+        echo "[INFO] Library projects publish during pre-merge build. Skipping."
+        exit 0
+      fi
+    - |
+      # Publish QA under BASE_VERSION (e.g. 1.1.7) instead of APP_VERSION (e.g. 1.1.7b7).
+      # .upload_application uses ${APP_VERSION}${PACKAGES_MAVEN_URL_SUFFIX} as the package
+      # version, so override APP_VERSION here to reuse the shared anchor unchanged.
+      if [[ -n "${BASE_VERSION:-}" ]]; then
+        echo "[INFO] Overriding APP_VERSION ('${APP_VERSION:-}') with BASE_VERSION ('${BASE_VERSION}') for QA publish"
+        export APP_VERSION="${BASE_VERSION}"
+      else
+        echo "[WARN] BASE_VERSION is not set; keeping APP_VERSION='${APP_VERSION:-}'"
+      fi
+    - |
+      # Override the URL suffix so QA publishes under -quality, not -development
+      # (workflow sets PACKAGES_MAVEN_URL_SUFFIX to DEV_PREFIX for feature→dev MRs).
+      export PACKAGES_MAVEN_URL_SUFFIX="${QA_PREFIX}"
+    - |
+      # Ensure QA publish output extension is set. If not defined in ci/config.yaml,
+      # default to apk for application projects.
+      if [[ -z "${PIPELINE_PROJECT_PUBLISH_OUTPUT_QUALITY:-}" ]]; then
+        export PIPELINE_PROJECT_PUBLISH_OUTPUT_QUALITY="apk"
+      fi
+    - !reference [.publish_pj_to_registry, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: summary
+# ======================================================================
+8.1 Comment Summary:
+  stage: summary
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_SECURE
+  needs:
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.3 Get Version
+      optional: true
+    - job: 7.1 Publish to Package Registry DEV
+      optional: true
+    - job: 7.2 Publish to Package Registry QA
+      optional: true
+  script:
+    - !reference [.comment_pj_summary, script]
+  rules:
+    - !reference [.rules_mr_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+
+# ======================================================================
+# STAGE: special_builds
+# ======================================================================
+9.1 Guardsquare Instrumented Build:
+  stage: special_builds
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Environment
+      optional: true
+    - job: 2.5 Retrieve Artifacts
+      optional: true
+    - job: 2.6 Retrieve Secrets
+      optional: true
+    - job: 3.3 Get Version
+      optional: true
+  variables:
+    PACKAGES_MAVEN_URL_INSTRUMENTED_SUFFIX: "${PACKAGES_MAVEN_URL_SUFFIX}-instrumented"
+    ANDROID_HOME: "/usr/lib/android-sdk"
+    ANDROID_SDK_ROOT: "/usr/lib/android-sdk"
+  before_script:
+    - !reference [.set_environment_variables, before_script]
+    - !reference [.update_apt, before_script]
+    - !reference [.update_java_temurin, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.download_cacerts, before_script]
+  script:
+    - CURRENT_DIR=$(pwd)
+    - |
+      set -Eeo pipefail
+
+      echo "[INFO] Checking if this is an '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' project..."
+      echo "[DEBUG] OS: ${PIPELINE_PROJECT_OS:-undefined}, TYPE: ${PIPELINE_PROJECT_TYPE:-undefined}"
+
+      if [[ "$PIPELINE_PROJECT_OS" != "$ANDROID_PROJECT_FLAG" || "$PIPELINE_PROJECT_TYPE" != "$APPLICATION_PROJECT_FLAG" ]]; then
+        echo "[INFO] Skipping Guardsquare build: Not an $ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG."
+        exit 0
+      fi
+
+      echo "[INFO] Checking if instrumented configuration is enabled..."
+      echo "[DEBUG] PIPELINE_PROJECT_INSTRUMENTED_ENABLED: ${!PIPELINE_PROJECT_INSTRUMENTED_ENABLED:-undefined}"
+      if [[ "${!PIPELINE_PROJECT_INSTRUMENTED_ENABLED:-False}" != "True" ]]; then
+        echo "[INFO] Instrumented configuration is not enabled in ci/config.yaml. Skipping."
+        exit 0
+      fi
+      echo "[INFO] Validation passed. Proceeding with build."
+    - !reference [.prebuild_android_application, script]
+    - !reference [.init_ssh_agent_guardsquare, script]
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      echo "[INFO] Installing Python dependencies..."
+      cd "$CURRENT_DIR" || EXECUTE_ERROR="1"
+      mkdir -p downloaded_packages
+    - |
+      echo "[INFO] Fetching GitLab group ID..."
+      GROUP_ID=$(python3 ${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_get_group_id.py -u $CI_SERVER_URL -t $TOKEN_GITLAB -p $CI_PROJECT_ID) || {
+        echo "[ERROR] Failed to retrieve GitLab group ID"
+        exit 1
+      }
+
+    - |
+      echo "[INFO] Executing instrumented command..."
+      echo "[DEBUG] Command: ${!PIPELINE_PROJECT_INSTRUMENTED_COMMAND}"
+      bash -c "$(echo ${!PIPELINE_PROJECT_INSTRUMENTED_COMMAND} | xargs)" && echo "[INFO] Instrumented command executed successfully." || {
+        echo "[ERROR] Instrumented command failed."
+        EXECUTE_ERROR="1"
+      }
+
+      grep_eval=$(echo "${!PIPELINE_PROJECT_INSTRUMENTED_FOLDER_REF}" | tr -d "'")
+
+      echo "[INFO] Searching for output files with extension '*.${!PIPELINE_PROJECT_INSTRUMENTED_OUTPUT}'..."
+      find "." \( -name "*.${!PIPELINE_PROJECT_INSTRUMENTED_OUTPUT}" -and -not -path "*.gradle*" \) | eval "grep ${grep_eval}" | while read -r gen_file; do
+        echo "[INFO] Found file: $gen_file"
+
+        echo "[INFO] Signing file with jarsigner..."
+        python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/add_signature_jarsigner.py" $gen_file || {
+          echo "[ERROR] Failed to sign $gen_file"
+          continue
+        }
+
+        ARTIFACT_NAME=$(basename "$gen_file")
+        mv "$gen_file" "downloaded_packages/${ARTIFACT_NAME}"
+
+        VERSION="${APP_VERSION}${PACKAGES_MAVEN_URL_INSTRUMENTED_SUFFIX}"
+        FILE_PATTERN="*.${!PIPELINE_PROJECT_INSTRUMENTED_OUTPUT}"
+
+        echo "[INFO] Exporting VERSION and FILE_PATTERN to build.env..."
+        echo "VERSION=${VERSION}" >> build.env
+        echo "FILE_PATTERN=${FILE_PATTERN}" >> build.env
+
+        echo "[INFO] Upload details:"
+        echo "Package Name: $CI_PROJECT_NAME"
+        echo "Packages Type Suffix: $PACKAGES_GENERIC_TYPE_SUFFIX"
+        echo "Version: $VERSION"
+        echo "Artifact: $ARTIFACT_NAME"
+        echo "File Pattern: $FILE_PATTERN"
+        echo "Upload URL: ${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_GENERIC_TYPE_SUFFIX}/${CI_PROJECT_NAME}/${VERSION}/${ARTIFACT_NAME}"
+      done
+
+      if [[ "${EXECUTE_ERROR:-0}" == "1" ]]; then
+        echo "[ERROR] Guardsquare Instrumented Build failed."
+        exit 1
+      fi
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  artifacts:
+    paths:
+      - downloaded_packages/*
+      - build.env
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_instrumented_to_quality, rules]
+    - !reference [.rules_instrumented_to_production, rules]
+    - when: never
+
+9.2 Upload Instrumented to Package Registry:
+  stage: special_builds
+  needs:
+    - job: 9.1 Guardsquare Instrumented Build

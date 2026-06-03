@@ -1,0 +1,37 @@
+# =============================================================================
+# Retrieve Android signing keys from AWS Secrets Manager
+# Runs on RUNNER_AWS_IMAGE (has aws cli + jq)
+# Exports KEY_ALIAS, KEY_PASSWORD, KEY_STORE_PASSWORD via dotenv artifact
+# =============================================================================
+.retrieve_signing_keys: &retrieve_signing_keys
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      echo "[INFO] Retrieving Android signing keys from AWS Secrets Manager"
+      SECRET_JSON=$(aws secretsmanager get-secret-value --region us-east-1 --secret-id AndroidReleaseKeys | jq -r .SecretString)
+
+      KEY_ALIAS="release"
+      KEY_PASSWORD=$(echo "$SECRET_JSON" | jq -r .KEY_PASSWORD)
+      KEY_STORE_PASSWORD=$(echo "$SECRET_JSON" | jq -r .KEY_STORE_PASSWORD)
+
+      if [ -z "$KEY_PASSWORD" ] || [ "$KEY_PASSWORD" == "null" ]; then
+        echo "[ERROR] KEY_PASSWORD not found in secret"
+        exit 1
+      fi
+
+      if [ -z "$KEY_STORE_PASSWORD" ] || [ "$KEY_STORE_PASSWORD" == "null" ]; then
+        echo "[ERROR] KEY_STORE_PASSWORD not found in secret"
+        exit 1
+      fi
+
+      echo "[INFO] KEY_ALIAS=${KEY_ALIAS}"
+      echo "[INFO] KEY_PASSWORD length=${#KEY_PASSWORD}"
+      echo "[INFO] KEY_STORE_PASSWORD length=${#KEY_STORE_PASSWORD}"
+
+      echo "KEY_ALIAS=${KEY_ALIAS}" > signing_keys.env
+      echo "KEY_PASSWORD=${KEY_PASSWORD}" >> signing_keys.env
+      echo "KEY_STORE_PASSWORD=${KEY_STORE_PASSWORD}" >> signing_keys.env
+
+      echo "[INFO] Signing keys exported to signing_keys.env"

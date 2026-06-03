@@ -1,0 +1,11 @@
+# Deploy PROD AAB a Google Play Store via script
+.deploy_to_google_play: &deploy_to_google_play
+  script:
+    - |
+      bash ./deploy_prod_aab_google_play.sh
+
+# Deploy QA AAB a Google Play Store (internal track) via script
+.deploy_qa_aab_to_google_play: &deploy_qa_aab_to_google_play
+  script:
+    - |
+      bash ./deploy_qa_aab_google_play.sh

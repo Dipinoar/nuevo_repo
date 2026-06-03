@@ -1,0 +1,76 @@
+# =============================================================================
+# Descarga individual de scripts PF via curl (estilo PJ)
+# Cada anchor descarga un script puntual. Se consume con !reference solo donde se necesita.
+# Para agregar un script nuevo: crear un anchor nuevo aquí.
+# =============================================================================
+
+.downloads_read_config: &downloads_read_config
+  script:
+    - |
+      echo "[INFO] Downloading read_config.py"
+      curl -fL -o read_config.py \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fread_config.py/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download read_config.py"
+
+.downloads_parametrized_build_google: &downloads_parametrized_build_google
+  script:
+    - |
+      echo "[INFO] Downloading parametrized_build_google.sh"
+      curl -fL -o parametrized_build_google.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fparametrized_build_google.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download parametrized_build_google.sh"
+      chmod +x parametrized_build_google.sh
+
+.downloads_parametrized_build_huawei: &downloads_parametrized_build_huawei
+  script:
+    - |
+      echo "[INFO] Downloading parametrized_build_huawei.sh"
+      curl -fL -o parametrized_build_huawei.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fparametrized_build_huawei.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download parametrized_build_huawei.sh"
+      chmod +x parametrized_build_huawei.sh
+
+.downloads_veracode_move_files: &downloads_veracode_move_files
+  script:
+    - |
+      echo "[INFO] Downloading veracode_move_files.sh"
+      curl -fL -o veracode_move_files.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fveracode_move_files.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download veracode_move_files.sh"
+      chmod +x veracode_move_files.sh
+
+.downloads_veracode_move_files_aab: &downloads_veracode_move_files_aab
+  script:
+    - |
+      echo "[INFO] Downloading veracode_move_files_aab.sh"
+      curl -fL -o veracode_move_files_aab.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fveracode_move_files_aab.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download veracode_move_files_aab.sh"
+      chmod +x veracode_move_files_aab.sh
+
+.downloads_fastlane_build_aab: &downloads_fastlane_build_aab
+  script:
+    - |
+      echo "[INFO] Downloading fastlane_build_aab.sh"
+      curl -fL -o fastlane_build_aab.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Ffastlane_build_aab.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download fastlane_build_aab.sh"
+      chmod +x fastlane_build_aab.sh
+
+.downloads_deploy_qa_aab_google_play: &downloads_deploy_qa_aab_google_play
+  script:
+    - |
+      echo "[INFO] Downloading deploy_qa_aab_google_play.sh"
+      curl -fL -o deploy_qa_aab_google_play.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fdeploy_qa_aab_google_play.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download deploy_qa_aab_google_play.sh"
+      chmod +x deploy_qa_aab_google_play.sh
+
+.downloads_deploy_prod_aab_google_play: &downloads_deploy_prod_aab_google_play
+  script:
+    - |
+      echo "[INFO] Downloading deploy_prod_aab_google_play.sh"
+      curl -fL -o deploy_prod_aab_google_play.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fdeploy_prod_aab_google_play.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download deploy_prod_aab_google_play.sh"
+      chmod +x deploy_prod_aab_google_play.sh

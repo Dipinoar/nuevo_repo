@@ -1,0 +1,81 @@
+.scan_android_library: &scan_android_library
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG $LIBRARY_PROJECT_FLAG' project?"
+            if [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG && $PIPELINE_PROJECT_TYPE == $LIBRARY_PROJECT_FLAG ]]; then
+                echo "[INFO!] Yes."
+
+                CURRENT_DIR=$(pwd)
+                mkdir $PIPELINE_LOCAL_SCRIPTS_FOLDER && cd $PIPELINE_LOCAL_SCRIPTS_FOLDER
+
+                curl -fL -o utils.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Futils.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download utils.py"
+                curl -fL -o get_pom_data.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fget_pom_data.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download get_pom_data.py"
+                curl -fL -o replace_pom_value.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Freplace_pom_value.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download replace_pom_value.py"
+
+                python3 -m pip install --upgrade pip
+                echo -e "boto3==1.39.8\npython-gitlab==6.1.0\npython-dotenv==1.1.1\nPyYAML==6.0.3\nStrEnum==0.4.15" > requirements.txt
+                python3 -m pip install -r requirements.txt || {
+                    echo "[WARN] Pinned install failed (likely Python version mismatch). Retrying without pins..."
+                    echo -e "boto3\npython-gitlab\npython-dotenv\nPyYAML\nStrEnum" > requirements.txt
+                    python3 -m pip install -r requirements.txt
+                }
+
+                cd "${CURRENT_DIR}"
+
+                echo "[INFO!] Moving output files for $ANDROID_PROJECT_FLAG $LIBRARY_PROJECT_FLAG"
+
+                if [[ "${!PIPELINE_PROJECT_SCAN_POMGEN}" != "" ]]; then
+                    echo "Executing command '${!PIPELINE_PROJECT_SCAN_POMGEN}'"
+                    bash -c "$(echo ${!PIPELINE_PROJECT_SCAN_POMGEN} | xargs)"
+                else
+                    echo "[ERROR] No pomgen command found in scan. Checking if it was generated."
+                    if [[ $(find . -type f -name "pom*.xml" | grep -c '.') == "0" ]]; then
+                        echo "[ERROR] No pom found. Check ci/config.yaml and define a way to generate the pom file."
+                        exit 1
+                    fi
+                fi
+
+                echo "[INFO!] Searching generated files and POM's"
+                find "." \( -name "*.${!PIPELINE_PROJECT_SCAN_OUTPUT}" -and -not -path "*.gradle*" \) -print0 | while IFS= read -r -d '' gen_file; do
+                    build_directory=$(dirname "$gen_file")
+
+                    current_dir="$build_directory"
+                    while [[ "$current_dir" != "/" && "$current_dir" != "." ]]; do
+                        pom_file=$(find "$current_dir" -name "pom*.xml" -print -quit)
+                        echo "POM_FILE: $pom_file"
+                        if [ -f "$pom_file" ]; then
+                            break
+                        fi
+                        current_dir=$(dirname "$current_dir")
+                    done
+
+                    if [ -f "$pom_file" ]; then
+                        echo "Checking $pom_file content"
+                        cat $pom_file || { echo "[ERROR] Failed to read $pom_file"; exit 1; }
+
+                        echo "[INFO!] Replacing POM Version for file $pom_file."
+                        if [ -z "$APP_VERSION" ]; then
+                            echo "[INFO!] No APP_VERSION found. Ignoring replacement."
+                        else
+                            python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/replace_pom_value.py" -p "$pom_file" -t "version" -v "${APP_VERSION}${PACKAGES_MAVEN_NAME_SUFFIX}"
+                        fi
+
+                        artifactId=$(python3 -c "import sys, xml.etree.ElementTree as ET; root = ET.parse(sys.argv[1]).getroot(); artifact = next((child.text for child in root if child.tag.endswith('artifactId') and child.text), ''); print(artifact)" "$pom_file")
+
+                        TARGET_DIR="${EFFECTIVE_RELEASE_DIR:-${RELEASE_DIRECTORY}}"
+                        mkdir -p "${TARGET_DIR}/$artifactId"
+
+                        file_name=$(basename $gen_file)
+                        ext="${file_name##*.}"
+                        name="${file_name%.*}"
+                        cp "$gen_file" "${TARGET_DIR}/$artifactId/$name.$ext"
+
+                        cp "$pom_file" "${TARGET_DIR}/$artifactId/$name.pom"
+                    fi
+                done
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG $LIBRARY_PROJECT_FLAG' process. "
+            fi

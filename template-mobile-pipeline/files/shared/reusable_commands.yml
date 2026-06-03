@@ -1,0 +1,723 @@
+.update_apt: &update_apt
+    before_script:
+        - |
+            echo "[INFO] Disabling AdoptOpenJDK repository and updating APT package list"
+            sed -i 's/^\(deb .*adoptopenjdk.*\)$/# \1/g' /etc/apt/sources.list
+            apt update -y
+
+.update_java_temurin: &update_java_temurin
+    before_script:
+        - |
+            echo "[INFO] Adding Temurin GPG key to trusted sources"
+            wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor | tee /etc/apt/trusted.gpg.d/adoptium.gpg > /dev/null
+
+            echo "[INFO] Adding Temurin repository to APT sources"
+            echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list
+
+            echo "[INFO] Updating APT package list"
+            apt update -y
+
+            echo "[INFO] Installing Temurin JDK version ${TEMURIN_VERSION}"
+            apt install -y "temurin-${TEMURIN_VERSION}-jdk"
+
+            echo "[INFO] Setting Temurin JDK as the default Java version"
+            update-java-alternatives -s "temurin-${TEMURIN_VERSION}-jdk-amd64"
+
+.update_gradle_version: &update_gradle_version
+    before_script:
+        - |
+            echo "[INFO] Updating Gradle to version ${GRADLE_VERSION}"
+
+            echo "[INFO] Installing zip utility (required by SDKMAN)"
+            apt-get update && apt-get install -y zip curl
+
+            echo "[INFO] Removing any previous SDKMAN installation"
+            rm -rf /root/.sdkman
+
+            echo "[INFO] Installing SDKMAN for managing development tools"
+            max_retries=5
+            attempt=0
+            success=false
+
+            while [ $attempt -lt $max_retries ]; do
+                echo "[INFO] Attempt $(($attempt + 1)) of $max_retries: Installing SDKMAN..."
+                if curl -s "https://get.sdkman.io" | bash; then
+                    success=true
+                    break
+                fi
+                echo "[WARN] SDKMAN installation failed. Retrying in 5 seconds..."
+                sleep 5
+                attempt=$(($attempt + 1))
+            done
+
+            if [ "$success" = false ]; then
+                echo "[ERROR] SDKMAN installation failed after $max_retries attempts."
+                exit 1
+            fi
+
+            if [ ! -f "/root/.sdkman/bin/sdkman-init.sh" ]; then
+                echo "[ERROR] SDKMAN init script not found after installation."
+                exit 1
+            fi
+            source "/root/.sdkman/bin/sdkman-init.sh"
+
+            echo "[INFO] Cleaning existing Gradle installation"
+            rm -rf /opt/gradle/*
+
+            echo "[INFO] Installing Gradle ${GRADLE_VERSION} via SDKMAN"
+            sdk install gradle "${GRADLE_VERSION}"
+
+            echo "[INFO] Copying Gradle binaries to /opt/gradle"
+            cp -r "/root/.sdkman/candidates/gradle/${GRADLE_VERSION}/"* /opt/gradle
+
+            echo "[INFO] Sourcing Gradle environment variables"
+            source /etc/profile.d/gradle.sh
+
+.get_chile_dependencies: &get_chile_dependencies
+    before_script:
+        - |
+            echo "[INFO] Cloning DevOps template repository"
+            cd .. && mkdir devops && cd devops
+            export DEVOPS_DIR=$(pwd)
+            git clone --depth 1 "http://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${CI_PIPELINE_REPOSITORY}.git" -b "${PIPELINE_BRANCH}"
+
+            echo "[INFO] Removing Git metadata from cloned repository"
+            cd "$CI_PIPELINE_REPOSITORY_DIR" && rm -rf .git
+
+            echo "[INFO] Returning to project directory"
+            cd "$CI_PROJECT_DIR"
+
+.collect_maven_release_artifacts: &collect_maven_release_artifacts
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+            PROJECT_ROOT="${ANDROID_PROJECT_PATH:-${CI_PROJECT_DIR}}"
+            mkdir -p "${RELEASE_PATH}"
+
+            normalize_release_key() {
+                local file_name stem base_name variant
+                file_name="$(basename "$1")"
+                stem="${file_name%.aar}"
+                base_name="${stem}"
+                variant="generic"
+
+                case "${stem}" in
+                    *-debug*)   base_name="${stem%%-debug*}"   ; variant="debug" ;;
+                    *-homolog*) base_name="${stem%%-homolog*}" ; variant="homolog" ;;
+                    *-release*) base_name="${stem%%-release*}" ; variant="release" ;;
+                esac
+
+                printf '%s|%s\n' "${base_name}" "${variant}"
+            }
+
+            has_equivalent_release_aar() {
+                local aar_path="$1"
+                local candidate_key existing_release_aar
+
+                candidate_key="$(normalize_release_key "${aar_path}")"
+                for existing_release_aar in "${existing_release_aars[@]:-}"; do
+                    [[ "$(normalize_release_key "${existing_release_aar}")" == "${candidate_key}" ]] && return 0
+                done
+                return 1
+            }
+
+            prune_duplicate_release_aars() {
+                local aar key current_name preferred_name preferred_aar
+                declare -A preferred_by_key=()
+                declare -A preferred_name_by_key=()
+
+                mapfile -t existing_release_aars < <(
+                    find "${RELEASE_PATH}" -maxdepth 1 -type f -name '*.aar' 2>/dev/null | sort -u
+                )
+
+                for aar in "${existing_release_aars[@]}"; do
+                    key="$(normalize_release_key "${aar}")"
+                    current_name="$(basename "${aar}")"
+
+                    if [[ -z "${preferred_by_key[$key]+x}" ]]; then
+                        preferred_by_key["${key}"]="${aar}"
+                        preferred_name_by_key["${key}"]="${current_name}"
+                        continue
+                    fi
+
+                    preferred_name="${preferred_name_by_key[$key]}"
+                    if [[ "${#current_name}" -gt "${#preferred_name}" ]]; then
+                        preferred_by_key["${key}"]="${aar}"
+                        preferred_name_by_key["${key}"]="${current_name}"
+                    fi
+                done
+
+                for aar in "${existing_release_aars[@]}"; do
+                    key="$(normalize_release_key "${aar}")"
+                    preferred_aar="${preferred_by_key[$key]}"
+                    if [[ "${aar}" == "${preferred_aar}" ]]; then
+                        continue
+                    fi
+
+                    echo "[INFO] Removing duplicate release AAR $(basename "${aar}") in favor of $(basename "${preferred_aar}")"
+                    rm -f "${aar}" "${RELEASE_PATH}/$(basename "${aar}" .aar).pom"
+                done
+
+                mapfile -t existing_release_aars < <(
+                    find "${RELEASE_PATH}" -maxdepth 1 -type f -name '*.aar' 2>/dev/null | sort -u
+                )
+            }
+
+            normalize_pom_for_publish() {
+                local pom_source="$1"
+                local pom_target="$2"
+
+                if [[ "${pom_source}" != "${pom_target}" ]]; then
+                    cp -f "${pom_source}" "${pom_target}"
+                fi
+
+                if command -v perl >/dev/null 2>&1; then
+                    perl -0pi -e 's/\sxmlns="http:\/\/maven\.apache\.org\/POM\/4\.0\.0"//' "${pom_target}"
+                fi
+            }
+
+            extract_root_pom_value() {
+                local pom_path="$1"
+                local tag_name="$2"
+
+                grep -o -m 1 "<${tag_name}>[^<]*</${tag_name}>" "${pom_path}" 2>/dev/null \
+                    | sed -E "s#<${tag_name}>([^<]*)</${tag_name}>#\\1#"
+            }
+
+            pom_matches_artifact_hint() {
+                local pom_path="$1"
+                local artifact_hint="$2"
+                local root_artifact_id
+
+                root_artifact_id="$(extract_root_pom_value "${pom_path}" artifactId)"
+                [[ -n "${root_artifact_id}" && "${root_artifact_id}" == "${artifact_hint}" ]]
+            }
+
+            resolve_pom_for_aar() {
+                local aar_path="$1"
+                local module_dir_hint="${2:-}"
+                local aar_name artifact_hint preferred_pattern candidate pom_file
+
+                aar_name="$(basename "${aar_path}")"
+                artifact_hint="${aar_name%.aar}"
+                artifact_hint="${artifact_hint%%-debug*}"
+                artifact_hint="${artifact_hint%%-homolog*}"
+                artifact_hint="${artifact_hint%%-release*}"
+
+                preferred_pattern='development|debug'
+                case "${aar_name}" in
+                    *homolog*) preferred_pattern='quality|homolog' ;;
+                    *release*) preferred_pattern='production|release' ;;
+                esac
+
+                pom_file=""
+
+                if [[ -n "${module_dir_hint}" && -d "${module_dir_hint}/build/publications" ]]; then
+                    while IFS= read -r candidate; do
+                        if pom_matches_artifact_hint "${candidate}" "${artifact_hint}"; then
+                            pom_file="${candidate}"
+                            if [[ "${candidate}" =~ /(${preferred_pattern})/ ]]; then
+                                break
+                            fi
+                        fi
+                    done < <(
+                        find "${module_dir_hint}/build/publications" \
+                            -type f \
+                            \( -name 'pom-default.xml' -o -name 'pom*.xml' -o -name '*.pom' \) \
+                            2>/dev/null | sort
+                    )
+                fi
+
+                if [[ -z "${pom_file}" ]]; then
+                    while IFS= read -r candidate; do
+                        if pom_matches_artifact_hint "${candidate}" "${artifact_hint}"; then
+                            pom_file="${candidate}"
+                            if [[ "${candidate}" =~ /(${preferred_pattern})/ ]]; then
+                                break
+                            fi
+                        fi
+                    done < <(
+                        find "${PROJECT_ROOT}" \
+                            -type f \
+                            -path '*/build/publications/*' \
+                            \( -name 'pom-default.xml' -o -name 'pom*.xml' -o -name '*.pom' \) \
+                            2>/dev/null | sort
+                    )
+                fi
+
+                if [[ -n "${pom_file}" && -f "${pom_file}" ]]; then
+                    printf '%s\n' "${pom_file}"
+                fi
+            }
+
+            echo "[STEP] Collecting Maven artifacts into ${RELEASE_PATH}"
+            mapfile -t module_aars < <(
+                find "${PROJECT_ROOT}" \
+                    -type f \
+                    -path '*/build/outputs/aar/*.aar' \
+                    ! -path "${RELEASE_PATH}/*" \
+                    ! -path '*/.gradle/*' \
+                    2>/dev/null | sort -u
+            )
+            prune_duplicate_release_aars
+
+            total_candidate_aars=$(( ${#module_aars[@]} + ${#existing_release_aars[@]} ))
+            poms_already_generated=false
+            if find "${PROJECT_ROOT}" \
+                -type f \
+                -path '*/build/publications/*' \
+                \( -name 'pom-default.xml' -o -name 'pom*.xml' -o -name '*.pom' \) \
+                -print -quit 2>/dev/null | grep -q .; then
+                poms_already_generated=true
+            fi
+
+            if [[ "${total_candidate_aars}" -gt 0 && "${poms_already_generated}" == "false" ]]; then
+                echo "[INFO] AARs found without generated POMs. Attempting to generate POM files with Gradle."
+                if [[ -f "${PROJECT_ROOT}/gradlew" ]]; then
+                    (
+                        set +e
+                        cd "${PROJECT_ROOT}" || exit 0
+                        chmod +x ./gradlew || true
+
+                        mapfile -t pom_tasks < <(
+                            ./gradlew tasks --all --console=plain 2>/dev/null \
+                                | grep 'generatePomFileFor.*Publication' \
+                                | awk '{print $1}' \
+                                | sed 's/^[[:space:]]*//' \
+                                | sort -u
+                        )
+
+                        if [[ "${#pom_tasks[@]}" -gt 0 ]]; then
+                            echo "[INFO] Running Gradle POM tasks: ${pom_tasks[*]}"
+                            ./gradlew "${pom_tasks[@]}" \
+                                -PmavenUser="${ANDROID_MAVEN_PULL_USER}" \
+                                -PmavenPassword="${ANDROID_MAVEN_PULL_USER_TOKEN}" \
+                                --no-daemon \
+                                --console=plain
+                        else
+                            echo "[WARN] No generatePomFileFor*Publication tasks were discovered."
+                        fi
+                    ) || echo "[WARN] Automatic POM generation failed. Continuing with the collected artifacts."
+                else
+                    echo "[WARN] gradlew was not found at ${PROJECT_ROOT}. Skipping automatic POM generation."
+                fi
+            fi
+
+            copied_aars=0
+            copied_poms=0
+
+            for aar in "${module_aars[@]}"; do
+                aar_name="$(basename "${aar}")"
+                module_dir="${aar%/build/outputs/aar/*}"
+                [[ "${module_dir}" == "${aar}" ]] && module_dir=""
+
+                if has_equivalent_release_aar "${aar}"; then
+                    echo "[INFO] Skipping ${aar_name} because RELEASE_PATH already has an equivalent AAR."
+                    continue
+                fi
+
+                echo "[INFO] Copying AAR ${aar_name} into ${RELEASE_PATH}"
+                cp -f "${aar}" "${RELEASE_PATH}/${aar_name}"
+                existing_release_aars+=("${RELEASE_PATH}/${aar_name}")
+                copied_aars=$((copied_aars + 1))
+
+                pom_file="$(resolve_pom_for_aar "${aar}" "${module_dir}")"
+                if [[ -n "${pom_file}" ]]; then
+                    normalize_pom_for_publish "${pom_file}" "${RELEASE_PATH}/${aar_name%.aar}.pom"
+                    copied_poms=$((copied_poms + 1))
+                    echo "[INFO] Paired ${aar_name} with $(basename "${pom_file}")"
+                else
+                    echo "[WARN] No POM found for ${aar}"
+                fi
+            done
+
+            mapfile -t release_poms < <(find "${RELEASE_PATH}" -maxdepth 1 -type f -name '*.pom' 2>/dev/null | sort -u)
+            for pom in "${release_poms[@]}"; do
+                normalize_pom_for_publish "${pom}" "${pom}"
+            done
+
+            mapfile -t release_aars < <(find "${RELEASE_PATH}" -maxdepth 1 -type f -name '*.aar' 2>/dev/null | sort -u)
+            for aar in "${release_aars[@]}"; do
+                pom_target="${RELEASE_PATH}/$(basename "${aar}" .aar).pom"
+                if [[ -f "${pom_target}" ]]; then
+                    continue
+                fi
+
+                pom_file="$(resolve_pom_for_aar "${aar}")"
+                if [[ -n "${pom_file}" ]]; then
+                    normalize_pom_for_publish "${pom_file}" "${pom_target}"
+                    copied_poms=$((copied_poms + 1))
+                    echo "[INFO] Recovered missing POM for $(basename "${aar}")"
+                else
+                    echo "[WARN] Release artifact $(basename "${aar}") still has no matching POM."
+                fi
+            done
+
+            echo "[INFO] Maven artifacts ready in ${RELEASE_PATH}: AAR=${copied_aars}, POM=${copied_poms}"
+
+.get_tag: &get_tag
+    before_script:
+        - |
+            # DEBUG
+            set -x
+
+            echo "[INFO] Fetching Git tags from remote repository"
+            git fetch --tags --quiet
+
+            echo "[INFO] Getting the latest tag from current branch"
+
+            COMMIT_SHORT="$(git rev-parse --short HEAD)"
+
+            echo "[DEBUG] COMMIT_SHORT == '${COMMIT_SHORT}'"
+
+            TAGS_ON_COMMIT="$(git tag --contains "$COMMIT_SHORT" || true)"
+
+            echo "[DEBUG] TAGS_ON_COMMIT == '${TAGS_ON_COMMIT}'"
+
+            set +o pipefail
+            if [[ $RUN_FEATURE_PIPELINE == "false" ]]; then
+                CURRENT_TAG=$( \
+                  printf '%s\n' "$TAGS_ON_COMMIT" \
+                  | grep -E '^v[0-9]+' \
+                  | grep -Ev 'b[0-9]+$' \
+                  | sort -V \
+                  | tail -n 1 \
+                )
+                echo "[DEBUG 0] CURRENT_TAG == '${CURRENT_TAG}'"
+            else
+                CURRENT_TAG=$( \
+                  printf '%s\n' "$TAGS_ON_COMMIT" \
+                  | grep -E '^v[0-9]+' \
+                  | sort -V \
+                  | tail -n 1 \
+                )
+            fi
+
+            echo "[DEBUG] CURRENT_TAG == '${CURRENT_TAG}'"
+
+            if [[ -z "$CURRENT_TAG" ]]; then
+                CURRENT_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
+            fi
+
+            if [[ -z "$CURRENT_TAG" ]]; then
+                echo "[INFO] No existing tags found. Generating temporal tag based on pipeline creation date"
+                DATE_FORMAT="$(date -d "${CI_PIPELINE_CREATED_AT}" +'%Y%m%d_%H%M%S')"
+                CURRENT_TAG="${TEMPORAL_TAG_PREFIX}_${DATE_FORMAT}"
+                echo "[INFO] Creating new temporal tag: $CURRENT_TAG"
+                git tag "$CURRENT_TAG"
+            fi
+
+            echo "[INFO] Last tag retrieved from branch $GITLAB_BRANCH: $CURRENT_TAG"
+            echo "CURRENT_TAG=$CURRENT_TAG" >> build.env
+
+.create_directory: &create_directory
+  script:
+    - |
+      echo "[INFO] Printing environment variables"
+      printenv
+
+      echo "[INFO] Creating local scripts directory: $PIPELINE_LOCAL_SCRIPTS_FOLDER"
+      mkdir $PIPELINE_LOCAL_SCRIPTS_FOLDER && cd $PIPELINE_LOCAL_SCRIPTS_FOLDER
+
+.downloads_retrieve_aws_secrets_dependency: &downloads_retrieve_aws_secrets_dependency
+  script:
+    - |
+      echo "[INFO] Downloading retrieve_aws_secrets.sh from pipeline repository"
+      curl -fL -o retrieve_aws_secrets.sh --location --request GET "${PIPELINE_API_REPO_URL}/scripts%2FPF%2FiOS%2Fretrieve_aws_secrets.sh/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download retrieve_aws_secrets.sh"
+      [ -f retrieve_aws_secrets.sh ] && echo "[INFO] retrieve_aws_secrets.sh path: $(pwd -P)/retrieve_aws_secrets.sh" || true
+
+.downloads_testflight_upload_dependency: &downloads_testflight_upload_dependency
+  script:
+    - |
+      echo "[INFO] Downloading testflight_upload.sh from pipeline repository"
+      curl -fL -o testflight_upload.sh --location --request GET "${PIPELINE_API_REPO_URL}/scripts%2FPF%2FiOS%2Ftestflight_upload.sh/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download testflight_upload.sh"
+      [ -f testflight_upload.sh ] && echo "[INFO] testflight_upload.sh path: $(pwd -P)/testflight_upload.sh" || true
+
+.downloads_utils_dependency: &downloads_utils_dependency
+  script:
+    - |
+      echo "[INFO] Downloading utils.py from pipeline repository"
+      curl -fL -o utils.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Futils.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download utils.py"
+
+.downloads_comment_dependency: &downloads_comment_dependency
+  script:
+    - |
+      echo "[INFO] Downloading gitlab_add_comment.py from pipeline repository"
+      curl -fL -o gitlab_add_comment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_add_comment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_add_comment.py"
+      echo "[INFO] Downloading comment.py (alias) from pipeline repository"
+      curl -fL -o comment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_add_comment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download comment.py"
+
+.downloads_enumerables_dependency: &downloads_enumerables_dependency
+  script:
+    - |
+      echo "[INFO] Downloading enumerables.py script from pipeline repository"
+      curl -fL -o enumerables.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenumerables.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download enumerables.py"
+      [ -f enumerables.py ] && echo "[INFO] enumerables.py path: $(pwd -P)/enumerables.py" || true
+
+.downloads_environment_dependency: &downloads_environment_dependency
+  script:
+    - |
+      echo "[INFO] Downloading environment.py script from pipeline repository"
+      curl -fL -o environment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenvironment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download environment.py"
+      [ -f environment.py ] && echo "[INFO] environment.py path: $(pwd -P)/environment.py" || true
+
+.downloads_dependencies: &downloads_dependencies
+  script:
+    - |
+      echo "[INFO] Downloading utils.py and gitlab_add_comment.py"
+      curl -fL -o utils.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Futils.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download utils.py"
+      [ -f utils.py ] && echo "[INFO] utils.py path: $(pwd -P)/utils.py" || true
+      curl -fL -o comment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_add_comment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download comment.py"
+      [ -f comment.py ] && echo "[INFO] comment.py path: $(pwd -P)/comment.py" || true
+      curl -fL -o gitlab_add_comment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_add_comment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download gitlab_add_comment.py"
+      [ -f gitlab_add_comment.py ] && echo "[INFO] gitlab_add_comment.py path: $(pwd -P)/gitlab_add_comment.py" || true
+
+.downloads_summary_dependency: &downloads_summary_dependency
+  script:
+    - |
+      echo "[INFO] Downloading summary.md and mr_artifacts.md template from pipeline repository"
+      curl -fL -o summary.md --location --request GET "${PIPELINE_API_REPO_URL}/templates%2Fsummary.md/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download summary.md"
+      [ -f summary.md ] && echo "[INFO] summary.md path: $(pwd -P)/summary.md" || true
+      curl -fL -o mr_artifacts.md --location --request GET "${PIPELINE_API_REPO_URL}/templates%2Fmr_artifacts.md/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download mr_artifacts.md"
+      [ -f mr_artifacts.md ] && echo "[INFO] mr_artifacts.md path: $(pwd -P)/mr_artifacts.md" || true
+
+.install_pipeline_python_deps: &install_pipeline_python_deps
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Installing Python dependencies for pipeline helpers"
+      if python3 -m pip --version >/dev/null 2>&1; then
+        python3 -m pip install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum \
+          || python3 -m pip install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum
+      elif command -v pip3 >/dev/null 2>&1; then
+        pip3 install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum \
+          || pip3 install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum
+      elif command -v pip >/dev/null 2>&1; then
+        pip install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum \
+          || pip install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum
+      else
+        echo "[ERROR] No pip executable available in runner image"
+        exit 1
+      fi
+
+.ensure_android_sdk: &ensure_android_sdk
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+      if [ -z "$SDK_PATH" ]; then
+        echo "[ERROR] ANDROID_SDK_ROOT/ANDROID_HOME is not defined"
+        exit 1
+      fi
+
+      export ANDROID_HOME="$SDK_PATH"
+      export ANDROID_SDK_ROOT="$SDK_PATH"
+
+      if [ ! -d "$SDK_PATH" ]; then
+        echo "[ERROR] Android SDK directory not found at $SDK_PATH"
+        exit 1
+      fi
+
+      printf "sdk.dir=%s\n" "$SDK_PATH" > local.properties
+      echo "[INFO] Android SDK configured at $SDK_PATH"
+      echo "[INFO] local.properties generated for Gradle"
+
+.downloads_get_group_dependency: &downloads_get_group_dependency
+  script:
+    - |
+      echo "[INFO] Downloading gitlab_get_group_id.py script from pipeline repository"
+      curl -fL -o get_group.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_get_group_id.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download get_group.py"
+      echo "[INFO] Downloading gitlab_get_group_id.py script from pipeline repository"
+      curl -fL -o gitlab_get_group_id.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_get_group_id.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_get_group_id.py"
+
+.downloads_upload_pom_dependency: &downloads_upload_pom_dependency
+  script:
+    - |
+      echo "[INFO] Downloading gitlab_upload_pom.py script from pipeline repository"
+      curl -fL -o upload_pom.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_pom.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download upload_pom.py"
+      echo "[INFO] Downloading upload_pom.py script from pipeline repository"
+      curl -fL -o gitlab_upload_pom.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_pom.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_upload_pom.py"
+
+.downloads_upload_generic_dependency: &downloads_upload_generic_dependency
+  script:
+    - |
+      echo "[INFO] Downloading gitlab_upload_generic.py script from pipeline repository"
+      curl -fL -o upload_generic.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_generic.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download upload_generic.py"
+      echo "[INFO] Downloading gitlab_upload_generic.py script from pipeline repository"
+      curl -fL -o gitlab_upload_generic.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_generic.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_upload_generic.py"
+
+.downloads_add_signature_jarsigner_dependency: &downloads_add_signature_jarsigner_dependency
+  script:
+    - |
+      echo "[INFO] Downloading add_signature_jarsigner.py script from pipeline repository"
+      curl -fL -o add_signature_jarsigner.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fadd_signature_jarsigner.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download add_signature_jarsigner.py"
+
+.downloads_yaml_to_env_dependency: &downloads_yaml_to_env_dependency
+  script:
+    - |
+      echo "[INFO] Downloading yaml_to_env.py script from pipeline repository"
+      curl -fL -o yaml_to_env.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fyaml_to_env.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download yaml_to_env.py"
+
+.downloads_retrieve_artifacts_dependency: &downloads_retrieve_artifacts_dependency
+  script:
+    - |
+      echo "[INFO] Downloading retrieve_artifacts.py script from pipeline repository"
+      curl -fL -o retrieve_artifacts.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fretrieve_artifacts.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download retrieve_artifacts.py"
+
+.downloads_read_secrets_dependency: &downloads_read_secrets_dependency
+  script:
+    - |
+      echo "[INFO] Downloading read_secrets.py script from pipeline repository"
+      curl -fL -o read_secrets.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fread_secrets.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download read_secrets.py"
+
+.downloads_deploytestrc_dependency: &downloads_deploytestrc_dependency
+  script:
+    - |
+      echo "[INFO] Downloading .deploytestrc.yml for semantic release configuration"
+      curl -fL -o .releaserc.yml --location --request GET "${PIPELINE_API_REPO_URL}/files%2Fsemantic-versioning%2F.deploytestrc.yml/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download .releaserc.yml"
+
+.downloads_releaserc_dependency: &downloads_releaserc_dependency
+  script:
+    - |
+      echo "[INFO] Downloading .releaserc.yml for semantic release configuration"
+      curl -fL -o .releaserc.yml --location --request GET "${PIPELINE_API_REPO_URL}/files%2Fsemantic-versioning%2F.releaserc.yml/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download .releaserc.yml"
+
+.downloads_semantic_dependency: &downloads_semantic_dependency
+  script:
+    - |
+      echo "[INFO] Downloading semantic_release.sh for semantic release configuration"
+      curl -fL -o semantic_release.sh --location --request GET "${PIPELINE_API_REPO_URL}/files%2Fsemantic-versioning%2Fsemantic_release.sh/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download semantic_release.sh"
+
+.prepare_requirements: &prepare_requirements
+  script:
+    - |
+      echo "[INFO] Installing pipreqs and preparing Python requirements"
+      python3 -m pip install pipreqs
+      echo "[INFO] Generating requirements.txt without version pinning"
+      pipreqs --mode no-pin .
+      echo "[INFO] Installing dependencies from requirements.txt"
+      python3 -m pip install -r requirements.txt
+      echo "[INFO] Upgrading python-gitlab package"
+      python3 -m pip install --upgrade python-gitlab
+
+.prepare_requirements_summary: &prepare_requirements_summary
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Installing Python dependencies for pipeline helpers"
+      if python3 -m pip --version >/dev/null 2>&1; then
+        python3 -m pip install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests \
+          || python3 -m pip install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests
+      elif command -v pip3 >/dev/null 2>&1; then
+        pip3 install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests \
+          || pip3 install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests
+      elif command -v pip >/dev/null 2>&1; then
+        pip install --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests \
+          || pip install --break-system-packages --no-cache-dir python-gitlab PyYAML boto3 python-dotenv StrEnum requests
+      else
+        echo "[ERROR] No pip executable available in runner image"
+        exit 1
+      fi
+
+.return_to_pipeline_dir: &return_to_pipeline_dir
+  script:
+    - |
+      echo "[INFO] Returning to pipeline working directory"
+      cd "${CURRENT_DIR}"
+
+.comment_to_mr: &comment_to_mr
+  script:
+    - |
+      echo "[INFO] Posting comment to GitLab Merge Request"
+      if [ -f "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_add_comment.py" ]; then
+        python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_add_comment.py" \
+          -u  "${CI_SERVER_URL}" \
+          -t  "${TOKEN_GITLAB}" \
+          -p  "${CI_PROJECT_ID}" \
+          -mr "${CI_MERGE_REQUEST_IID}" \
+          -m  "${MESSAGE}"
+      elif [ -f "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/comment.py" ]; then
+        python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/comment.py" \
+          -u  "${CI_SERVER_URL}" \
+          -t  "${TOKEN_GITLAB}" \
+          -p  "${CI_PROJECT_ID}" \
+          -mr "${CI_MERGE_REQUEST_IID}" \
+          -m  "${MESSAGE}"
+      else
+        echo "[ERROR] No comment script found (gitlab_add_comment.py/comment.py)"
+        exit 1
+      fi
+
+.source_python_activate: &source_python_activate
+  script:
+    - |
+      echo "[INFO] Activating Python virtual environment"
+      source python_runner/bin/activate
+
+.current_dir: &current_dir
+  script:
+    - |
+      echo "[INFO] Saving current working directory"
+      CURRENT_DIR=$(pwd)
+
+.retrieve_env_vars: &retrieve_env_vars
+  script:
+    - |
+      echo "[INFO] Retrieving environment variables from ci/config.yaml"
+      python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/yaml_to_env.py" -f "ci/config.yaml" -e $ENVIRONMENT
+
+.prepare_py_env: &prepare_py_env
+  script:
+    - |
+      echo "[INFO] Creating and activating Python virtual environment"
+      python3 -m venv python_runner && source python_runner/bin/activate
+
+.prepare_python_files: &prepare_python_files
+  script:
+    - |
+      echo "[INFO] Installing pipreqs and preparing Python requirements"
+      python -m pip install pipreqs
+      echo "[INFO] Generating requirements.txt"
+      pipreqs .
+      echo "[INFO] Installing dependencies from requirements.txt"
+      python -m pip install -r requirements.txt
+      echo "[INFO] Installing python-gitlab package"
+      python3 -m pip install python-gitlab
+
+.before_pipeline: &before_pipeline
+  before_script:
+    - echo "[INFO] Setting GitLab branch environment variables"
+    - export GITLAB_BRANCH="$CI_COMMIT_BRANCH"
+    - export GITLAB_SOURCE_BRANCH="$CI_COMMIT_BRANCH"
+    - export GITLAB_TARGET_BRANCH="$CI_COMMIT_BRANCH"
+    - |
+      if [ "$CI_PIPELINE_SOURCE" == "merge_request_event" ]; then
+        echo "[INFO] Merge request detected. Updating branch variables"
+        export IS_MERGE_REQUEST="true"
+        export GITLAB_BRANCH="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        export GITLAB_SOURCE_BRANCH="$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+        export GITLAB_TARGET_BRANCH="$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+      fi
+
+.git_auth: &git_auth
+  before_script:
+    - echo "[INFO] Configuring Git global user"
+    - git config --global user.email "${GITLAB_USER_EMAIL:-ci@example.com}"
+    - git config --global user.name "${GITLAB_USER_NAME:-GitLab CI}"
+
+.set_environment_variables: &set_environment_variables
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "Set variables per environment"
+      export AWS_SECRET_ROLE="AWS_SECRET_ROLE${ENVIRONMENT_SUFFIX}"

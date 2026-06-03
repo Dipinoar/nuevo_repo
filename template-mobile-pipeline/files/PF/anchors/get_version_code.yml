@@ -1,0 +1,76 @@
+# Obtener version code desde Google Play via Fastlane
+.install_fastlane: &install_fastlane
+  before_script:
+    - |
+      echo "[INFO] Installing Fastlane"
+      gem install fastlane --no-document
+
+.decode_google_play_credentials: &decode_google_play_credentials
+  before_script:
+    - |
+      echo "[INFO] Decoding Google Play credentials from GOOGLE_PLAY_CREDENTIALS_B64"
+      if [ -z "${GOOGLE_PLAY_CREDENTIALS_B64:-}" ]; then
+        echo "[ERROR] GOOGLE_PLAY_CREDENTIALS_B64 is not set. Configure this CI/CD variable."
+        exit 1
+      fi
+
+      export GOOGLE_PLAY_CREDENTIALS="${CI_PROJECT_DIR}/google-play-credentials.json"
+
+      echo "${GOOGLE_PLAY_CREDENTIALS_B64}" | base64 -d > "${GOOGLE_PLAY_CREDENTIALS}"
+      echo "[INFO] Google Play credentials written to ${GOOGLE_PLAY_CREDENTIALS}"
+
+      echo "[INFO] ls -lh ${GOOGLE_PLAY_CREDENTIALS}"
+      ls -lh "${GOOGLE_PLAY_CREDENTIALS}"
+
+.get_play_version_code: &get_play_version_code
+  script:
+    - |
+      set -eo pipefail
+
+      if [ -f build.env ]; then
+        set -a
+        source build.env
+        set +a
+      fi
+
+      export GOOGLE_PLAY_CREDENTIALS="${CI_PROJECT_DIR}/google-play-credentials.json"
+
+      case "${TARGET_BRANCH}" in
+        production)
+          export GOOGLE_PLAY_TRACK="${INTERNAL_TRACK}"
+          ;;
+        quality)
+          export PRODUCTION_PACKAGE="${QUALITY_PACKAGE}"
+          export GOOGLE_PLAY_TRACK="${INTERNAL_TRACK}"
+          ;;
+        *)
+          export PRODUCTION_PACKAGE="${QUALITY_PACKAGE}"
+          export GOOGLE_PLAY_TRACK="${INTERNAL_TRACK}"
+          ;;
+      esac
+
+      echo "[INFO] Querying Google Play version codes"
+      echo "[INFO] TARGET_BRANCH: ${TARGET_BRANCH}"
+      echo "[INFO] PRODUCTION_PACKAGE: ${PRODUCTION_PACKAGE}"
+      echo "[INFO] GOOGLE_PLAY_TRACK: ${GOOGLE_PLAY_TRACK}"
+
+      cd "${CI_PROJECT_DIR}"
+      OUTPUT=$(fastlane check_play_versions 2>&1) || true
+      echo "$OUTPUT"
+
+      CODES_LINE=$(echo "$OUTPUT" | grep 'PLAY_VERSION_CODES=' | tail -1)
+      CODES_CSV=$(echo "$CODES_LINE" | sed 's/.*PLAY_VERSION_CODES=//')
+
+      if [ -z "$CODES_CSV" ]; then
+        echo "[WARN] No version codes found on Google Play. Using 0 as base."
+        MAX_CODE=0
+      else
+        MAX_CODE=$(echo "$CODES_CSV" | tr ',' '\n' | sort -n | tail -1)
+        echo "[INFO] Current max version code: ${MAX_CODE}"
+      fi
+
+      VERSION_CODE=$((MAX_CODE + 1))
+      echo "[INFO] New VERSION_CODE: ${VERSION_CODE}"
+
+      echo "VERSION_CODE=${VERSION_CODE}" > .version_code_env
+      cat .version_code_env

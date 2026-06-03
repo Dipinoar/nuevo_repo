@@ -1,0 +1,34 @@
+# =============================================================================
+# Preparación de metadata y archivos para Veracode
+# Requiere: VERACODE_PROVIDER_FLAG, VERACODE_PROVIDER_SUFFIX
+# Requiere: .downloads_veracode_move_files ejecutado antes en el mismo job
+# =============================================================================
+.veracode_prepare_metadata: &veracode_prepare_metadata
+  script:
+    - |
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
+      echo "CI_ARTIFACT_PROJECT_SOURCE=android" >> build.env
+      echo "CI_ARTIFACT_VERSION=${VERSION_WITH_V}" >> build.env
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
+      echo "VERACODE_APPNAME_FLAG=${VERACODE_PROVIDER_FLAG}" >> build.env
+      echo "VERACODE_APPNAME=${CI_PROJECT_PATH}-${VERACODE_PROVIDER_SUFFIX}" >> build.env
+      echo "VERACODE_APP_TYPE=application" >> build.env
+      echo "VERACODE_TEAMS=${VERACODE_TEAMS}" >> build.env
+      echo "VERACODE_FILEPATH=artifact/dwtoveracode/app_${VERACODE_PROVIDER_FLAG##*-}_latest.apk" >> build.env
+
+      bash ./veracode_move_files.sh
+
+.veracode_prepare_metadata_aab: &veracode_prepare_metadata_aab
+  script:
+    - |
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
+      echo "CI_ARTIFACT_PROJECT_SOURCE=android" >> build.env
+      echo "CI_ARTIFACT_VERSION=${VERSION_WITH_V}" >> build.env
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> build.env
+      echo "VERACODE_APPNAME_FLAG=${VERACODE_PROVIDER_FLAG}" >> build.env
+      echo "VERACODE_APPNAME=${CI_PROJECT_PATH}-${VERACODE_PROVIDER_SUFFIX}" >> build.env
+      echo "VERACODE_APP_TYPE=application" >> build.env
+      echo "VERACODE_TEAMS=${VERACODE_TEAMS}" >> build.env
+      echo "VERACODE_FILEPATH=artifact/dwtoveracode/app_gms_latest.aab" >> build.env
+
+      bash ./veracode_move_files_aab.sh

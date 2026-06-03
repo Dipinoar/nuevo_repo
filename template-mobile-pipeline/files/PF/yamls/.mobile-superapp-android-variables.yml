@@ -1,0 +1,48 @@
+variables:
+  ANDROID_HOME: "/opt/android-sdk"
+  ANDROID_SDK_ROOT: "/opt/android-sdk"
+  ANDROID_PROJECT_PATH: "${CI_PROJECT_DIR}"
+  PACKAGE_REGISTRY_ID: 12754 # "${CI_PROJECT_ID}" || 12754
+  PIPELINE_API_REPO_URL: "http://gitlab.itauchile.cl/api/v4/projects/${PIPELINE_REPO_ID}/repository/files"
+  PIPELINE_LOCAL_SCRIPTS_FOLDER: "pipeline-scripts"
+  PIPELINE_REPO_ID: 9393
+  RELEASE_PATH: "${CI_PROJECT_DIR}/release"
+  RUNNER_DEFAULT_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-default-image:2.5.2-secure"
+  RUNNER_ANDROID_SECURE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:1.0.0-secure"
+  RUNNER_AWS_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-secure-aws:1.0.0-secure"
+  RUNNER_ANDROID_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3"
+  NODE_SECURE_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-node:24.11.0-secure"
+  ARN_FIREBASE_DISTRIBUTION_TOKEN: "arn:aws:secretsmanager:us-east-1:133171776067:secret:token/pipeline/firebase/appDistribution-01-zHygaS"
+  FASTLANE_SKIP_UPDATE_CHECK: "true"
+  FASTLANE_HIDE_CHANGELOG: "true"
+  APK_ROOT: "${CI_PROJECT_DIR}/app/build/outputs/apk"
+
+  BRANCH: "${CI_COMMIT_BRANCH}"
+  TARGET_BRANCH: "${CI_COMMIT_BRANCH}"
+  PIPELINE_BRANCH: "feature/CCPM-175/guardsquare-android-superapp"
+  QA_PREFIX: "-quality"
+  DEV_PREFIX: "-development"
+  PROD_PREFIX: "-production"
+  UNOFFICIAL_PREFIX: "-unofficial"
+  IS_UNOFFICIAL: "false"
+  MAKE_REBASE: "false"
+  APP_ENABLE: "false"
+
+  BUILD_DEV: "true"
+  GOOGLE_VERACODE_STEP: "true"
+  HUAWEI_VERACODE_STEP: "true"
+  GOOGLE_PLAY_DEPLOY_STEP: "true"
+  GOOGLE_PLAY_DRY_RUN: "false"
+  FIREBASE_UPLOAD_STEP: "true"
+
+  # VERACODE VARIABLES
+  VERACODE_DIR_NAME: "dwtoveracode"
+  VERACODE_TEAMS: "superapp ITAUCL"
+  CI_ARTIFACT_PIPELINE_ID: ${CI_PIPELINE_ID}
+  PIPELINE_ID: ${CI_PIPELINE_ID}
+  CI_ARTIFACT_PROJECT_ID: ${CI_PROJECT_ID}
+  PROJECT_ID: ${CI_PROJECT_ID}
+  veracodeoff: "false"
+
+  SSH_GUARDSQUARE_KEY: "/root/.ssh/guardsquare_rsa"
+  SSH_GUARDSQUARE_PASS: "Dexguard.2025"

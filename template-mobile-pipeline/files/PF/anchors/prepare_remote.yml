@@ -1,0 +1,31 @@
+# =============================================================================
+# Preparación del entorno remoto: lee config.yaml, genera build.env
+# Requiere: .downloads_read_config ejecutado antes en el mismo job
+# =============================================================================
+.prepare_remote_env: &prepare_remote_env
+  script:
+    - |
+      echo "[INFO] Installing Python and dependencies"
+      apt -y install python3-pip
+
+      ROOT_DIR="$(pwd)"
+      CONFIG_FILE="$ROOT_DIR/ci/config.yaml"
+      ENV_FILE="$ROOT_DIR/build.env"
+
+      echo "[INFO] Validating config.yaml"
+      test -f "$CONFIG_FILE" || { echo "ERROR: $CONFIG_FILE not found"; exit 1; }
+
+      echo "[INFO] Installing Python requirements"
+      python3 -m pip install pipreqs
+      pipreqs . --mode no-pin && python3 -m pip install -r requirements.txt
+
+      echo "[INFO] Generating .env file"
+      python3 read_config.py -c "$CONFIG_FILE" -e "$ENV_FILE"
+
+      echo "[INFO] Validating build.env"
+      test -s "$ENV_FILE" || { echo "ERROR: $ENV_FILE was not generated or is empty"; exit 1; }
+
+      echo "PIPELINE_ID=${CI_PIPELINE_ID}" >> "$ENV_FILE"
+
+      echo "[INFO] build.env content:"
+      cat "$ENV_FILE"

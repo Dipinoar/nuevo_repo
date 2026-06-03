@@ -1,0 +1,10 @@
+.scan_android_library_unpinned: &scan_android_library_unpinned
+    script:
+        - |
+            if [[ -f ".sequential_publish_done" ]]; then
+              echo "[INFO] Library artifacts already published sequentially. Skipping scan."
+            elif [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG && $PIPELINE_PROJECT_TYPE == $LIBRARY_PROJECT_FLAG ]]; then
+              echo "[INFO] Single-module library scan — no action needed (handled by build)."
+            else
+              echo "[INFO] Not a library project. Skipping."
+            fi

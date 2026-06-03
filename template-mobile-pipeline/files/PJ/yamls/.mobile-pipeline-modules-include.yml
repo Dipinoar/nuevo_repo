@@ -1,0 +1,35 @@
+include:
+  # LOCAL
+  - local: 'files/PJ/yamls/.mobile-pipeline-variables.yml'
+  - local: 'files/PJ/yamls/.mobile-pipeline-workflow.yml'
+
+  # SHARED
+  - local: 'files/shared/reusable_commands.yml'
+  - local: 'files/shared/rules_components.yml'
+  - local: 'files/shared/check_rebase.yml'
+  - local: 'files/shared/calculate_version.yml'
+
+  # PF ANCHORS (shared)
+  - local: 'files/PF/anchors/gradle_test.yml'
+
+  # PJ ANCHORS
+  - local: 'files/PJ/anchors/before_script.yml'
+  - local: 'files/PJ/anchors/download_cacerts.yml'
+  - local: 'files/PJ/anchors/init_ssh_agent_guardsquare.yml'
+  - local: 'files/PJ/anchors/prebuild_android_application.yml'
+  - local: 'files/PJ/anchors/prepare_environment.yml'
+  - local: 'files/PJ/anchors/prepare_recover_package_scripts.yml'
+  - local: 'files/PJ/anchors/release_android_application.yml'
+  - local: 'files/PJ/anchors/release_android_library.yml'
+  - local: 'files/PJ/anchors/scan_android_application_unpinned.yml'
+  - local: 'files/PJ/anchors/scan_android_library_unpinned.yml'
+  - local: 'files/PJ/anchors/scan_android_library.yml'
+  - local: 'files/PJ/anchors/copy_gradle_module_metadata.yml'
+  - local: 'files/PJ/anchors/set_environment_variables.yml'
+  - local: 'files/PJ/anchors/set_java_version.yml'
+  - local: 'files/PJ/anchors/setup_android_linux_env.yml'
+  - local: 'files/PJ/anchors/test_and_build.yml'
+  - local: 'files/PJ/anchors/build_and_publish_sequential.yml'
+  - local: 'files/PJ/anchors/upload_android_library.yml'
+  - local: 'files/PJ/anchors/upload_application.yml'
+  - local: 'files/PJ/anchors/verify_package_registry.yml'

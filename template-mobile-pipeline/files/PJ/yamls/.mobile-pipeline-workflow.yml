@@ -1,0 +1,101 @@
+workflow:
+  rules:
+
+    # 🚫 Nunca ejecutar en tags
+    - if: '$CI_COMMIT_TAG'
+      when: never
+
+    # =====================================================
+    # 🚫 BLOQUEOS DE MERGE REQUEST
+    # =====================================================
+
+    # Bloqueo hacia quality (solo desde development)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != "development"'
+      variables:
+        MERGE_REQUEST_BLOCKED: "true"
+
+    # Bloqueo hacia production (solo desde quality)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != "quality"'
+      variables:
+        MERGE_REQUEST_BLOCKED: "true"
+
+    # =====================================================
+    # ✅ MERGE REQUESTS VÁLIDOS (PROMOCIÓN ENTRE ENTORNOS)
+    # =====================================================
+
+    # MR → development
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+      variables:
+        GIT_CHECKOUT_REF: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        PACKAGES_MAVEN_URL_SUFFIX: "${DEV_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+      when: always
+
+    # development → quality
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development"'
+      variables:
+        GIT_CHECKOUT_REF: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        PACKAGES_MAVEN_URL_SUFFIX: "${QA_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${QA_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_QUALITY"
+        ENVIRONMENT: "quality"
+      when: always
+
+    # quality → production
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality"'
+      variables:
+        GIT_CHECKOUT_REF: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        PACKAGES_MAVEN_URL_SUFFIX: ""
+        PACKAGES_MAVEN_NAME_SUFFIX: ""
+        ENVIRONMENT_SUFFIX: "_PRODUCTION"
+        ENVIRONMENT: "production"
+      when: always
+
+    # =====================================================
+    # ⚙️ DEFAULT MERGE REQUEST
+    # =====================================================
+
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      variables:
+        GIT_CHECKOUT_REF: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+        MERGE_REQUEST_NOT_PROTECTED: "true"
+      when: always
+
+    # =====================================================
+    # ✅ EJECUCIÓN POR RAMA
+    # =====================================================
+
+    # development
+    - if: '$CI_COMMIT_BRANCH == "development"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${DEV_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+
+    # quality
+    - if: '$CI_COMMIT_BRANCH == "quality"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${QA_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${QA_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_QUALITY"
+        ENVIRONMENT: "quality"
+
+    # production
+    - if: '$CI_COMMIT_BRANCH == "production"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: ""
+        PACKAGES_MAVEN_NAME_SUFFIX: ""
+        ENVIRONMENT_SUFFIX: "_PRODUCTION"
+        ENVIRONMENT: "production"

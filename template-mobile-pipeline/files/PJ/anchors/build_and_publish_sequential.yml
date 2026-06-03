@@ -1,0 +1,168 @@
+# Sequential build + publish for multi-module library projects.
+# Must run BEFORE run_pj_build in the job script.
+# - For multi-module library: builds each module sequentially, publishes to
+#   Package Registry immediately, sets .sequential_publish_done marker.
+# - For everything else (application, single-module library): does nothing.
+# When .sequential_publish_done exists, run_pj_build and scan anchors skip.
+
+.build_and_publish_sequential: &build_and_publish_sequential
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      PUBLISH_CMD_VAR="PIPELINE_PROJECT_PUBLISH_COMMAND${ENVIRONMENT_SUFFIX}"
+      BUILD_CMD_VAR="PIPELINE_PROJECT_BUILD${ENVIRONMENT_SUFFIX}"
+      POMGEN_VAR="PIPELINE_PROJECT_PUBLISH_POMGEN${ENVIRONMENT_SUFFIX}"
+      OUTPUT_VAR="PIPELINE_PROJECT_PUBLISH_OUTPUT${ENVIRONMENT_SUFFIX}"
+
+      FULL_CMD=$(echo "${!PUBLISH_CMD_VAR:-${!BUILD_CMD_VAR:-}}" | sed "s/^'//;s/'$//")
+      POMGEN_CMD=$(echo "${!POMGEN_VAR:-}" | sed "s/^'//;s/'$//")
+      OUTPUT_EXT="${!OUTPUT_VAR:-aar}"
+
+      # Only activate for multi-module library (command contains ' && ')
+      if [[ "$PIPELINE_PROJECT_TYPE" != "library" || "$FULL_CMD" != *" && "* ]]; then
+        echo "[INFO] Not a multi-module library. Deferring to standard build."
+      else
+
+      mkdir -p ${RELEASE_DIRECTORY}
+
+      # Download scripts
+      mkdir -p ${PIPELINE_LOCAL_SCRIPTS_FOLDER}
+      for s in replace_pom_value.py gitlab_upload_pom.py utils.py find_package_id.py; do
+        curl -fsSL -o "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/${s}" \
+          "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2F${s}/raw?ref=${PIPELINE_BRANCH}" \
+          --header "Authorization: Bearer $TOKEN_GITLAB" 2>/dev/null || true
+      done
+      python3 -m pip install requests -q 2>/dev/null || true
+
+      MAVEN_URL="${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_MAVEN_TYPE_SUFFIX}"
+      PKG_VERSION="${APP_VERSION}${PACKAGES_MAVEN_NAME_SUFFIX}"
+
+      IFS=$'\n' read -r -d '' -a CMD_STEPS <<< "$(echo "$FULL_CMD" | sed 's/ && /\n/g')" || true
+      IFS=$'\n' read -r -d '' -a POMGEN_STEPS <<< "$(echo "$POMGEN_CMD" | sed 's/ && /\n/g')" || true
+      TOTAL=${#CMD_STEPS[@]}
+
+      # variable "NAVIGATION": only build first module
+      if [[ $NAVIGATION == "true" ]]; then
+        echo "═══════════════════════════════════════════"
+        echo " 🏷️ Variable 'NAVIGATION' set — first module only"
+        echo " Version: ${PKG_VERSION}"
+        echo "═══════════════════════════════════════════"
+        TOTAL=1
+      else
+        echo "═══════════════════════════════════════════"
+        echo " Multi-module library: ${TOTAL} modules"
+        echo " Version: ${PKG_VERSION}"
+        echo "═══════════════════════════════════════════"
+      fi
+
+      SUMMARY_FILE=$(mktemp)
+
+      for i in $(seq 0 $((TOTAL - 1))); do
+        N=$((i + 1))
+        touch ".ts_${i}"; sleep 1
+
+        echo ""
+        echo "── [${N}/${TOTAL}] BUILD ──────────────────────"
+        bash -c "${CMD_STEPS[$i]}" && echo "   ✅ OK" || { echo "   ❌ FAILED"; exit 1; }
+
+        if [[ ${#POMGEN_STEPS[@]} -gt $i && -n "${POMGEN_STEPS[$i]}" ]]; then
+          echo "── [${N}/${TOTAL}] POMGEN ─────────────────────"
+          bash -c "${POMGEN_STEPS[$i]}" || true
+        fi
+
+        echo "── [${N}/${TOTAL}] PUBLISH ────────────────────"
+        while IFS= read -r -d '' aar; do
+          [[ ! "$aar" -nt ".ts_${i}" ]] && continue
+
+          pom=""; d=$(dirname "$aar")
+          while [[ "$d" != "." && "$d" != "/" ]]; do
+            pom=$(find "$d" -maxdepth 1 -name "pom*.xml" -print -quit 2>/dev/null)
+            [[ -f "$pom" ]] && break; d=$(dirname "$d")
+          done
+          [[ ! -f "$pom" ]] && pom=$(find "./$(echo "$aar" | cut -d/ -f2)/build/publications" -name "pom*.xml" -print -quit 2>/dev/null) || true
+          [[ ! -f "$pom" ]] && continue
+
+          [[ -n "$APP_VERSION" ]] && python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/replace_pom_value.py" -p "$pom" -t "version" -v "${PKG_VERSION}" 2>/dev/null || true
+
+          aid=$(python3 -c "import sys,xml.etree.ElementTree as ET;r=ET.parse(sys.argv[1]).getroot();print(next((c.text for c in r if c.tag.endswith('artifactId')),'-'))" "$pom" 2>/dev/null)
+          gid=$(python3 -c "import sys,xml.etree.ElementTree as ET;r=ET.parse(sys.argv[1]).getroot();print(next((c.text for c in r if c.tag.endswith('groupId')),'-'))" "$pom" 2>/dev/null)
+          gpath=$(echo "$gid" | tr '.' '/')
+
+          mkdir -p "${RELEASE_DIRECTORY}/${aid}"
+          base=$(basename "$aar"); base="${base%.*}"
+          cp "$aar" "${RELEASE_DIRECTORY}/${aid}/${base}.${OUTPUT_EXT}"
+          cp "$pom" "${RELEASE_DIRECTORY}/${aid}/${base}.pom"
+
+          # Buscar Gradle Module Metadata (.module) si existe
+          module_file=""
+          pom_dir=$(dirname "$pom")
+          module_file=$(find "$pom_dir" -maxdepth 1 \( -name "*.module" -o -name "module.json" \) -print -quit 2>/dev/null) || true
+          if [[ -z "$module_file" ]]; then
+            module_file=$(find "./$(echo "$aar" | cut -d/ -f2)/build/publications" -maxdepth 2 \( -name "*.module" -o -name "module.json" \) -print -quit 2>/dev/null) || true
+          fi
+          if [[ -n "$module_file" && -f "$module_file" ]]; then
+            cp "$module_file" "${RELEASE_DIRECTORY}/${aid}/${aid}-${PKG_VERSION}.module"
+            echo "   📦 Gradle Module Metadata found and copied"
+          fi
+
+          CHECK_URL="${MAVEN_URL}/${gpath}/${aid}/${PKG_VERSION}/${aid}-${PKG_VERSION}.pom"
+          HTTP=$(curl -sS -o /dev/null -w "%{http_code}" --header "JOB-TOKEN: ${CI_JOB_TOKEN}" "${CHECK_URL}" 2>/dev/null || echo "000")
+
+          # [DISABLED-BETA] No-overwrite policy — reactivar cuando beta esté habilitada.
+          # if [[ "$HTTP" == "200" ]]; then
+          #   echo "   ❌ ${gid}:${aid}:${PKG_VERSION} — already exists in Package Registry."
+          #   echo "   [ERROR] Cannot overwrite existing artifacts. This version was already published."
+          #   exit 1
+          # fi
+
+          if [[ "$HTTP" == "200" ]]; then
+            echo "   🔄 ${gid}:${aid}:${PKG_VERSION} — exists, overwriting..."
+          fi
+
+          python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_pom.py" \
+            -p "${RELEASE_DIRECTORY}/${aid}/${base}.pom" -u "${MAVEN_URL}" -a "JOB-TOKEN" -t "${CI_JOB_TOKEN}" \
+            && echo "   ✅ ${gid}:${aid}:${PKG_VERSION} — uploaded" \
+            || echo "   ❌ ${gid}:${aid}:${PKG_VERSION} — failed"
+
+          # Upload .module si existe
+          MODULE_PATH="${RELEASE_DIRECTORY}/${aid}/${aid}-${PKG_VERSION}.module"
+          if [[ -f "$MODULE_PATH" ]]; then
+            MODULE_UPLOAD_URL="${MAVEN_URL}/${gpath}/${aid}/${PKG_VERSION}/${aid}-${PKG_VERSION}.module"
+            curl -sS --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+              --upload-file "$MODULE_PATH" \
+              "${MODULE_UPLOAD_URL}" \
+              && echo "   ✅ ${aid}.module — uploaded" \
+              || echo "   ❌ ${aid}.module — failed"
+          fi
+
+          echo "${gid}|${aid}|${PKG_VERSION}|${gpath}|${OUTPUT_EXT}|${module_file:+module}" >> "$SUMMARY_FILE"
+        done < <(find "." -path "*/build/*" -name "*.${OUTPUT_EXT}" -not -path "*.gradle*" -print0 2>/dev/null) || true
+      done
+
+      # Summary
+      echo ""
+      echo "═══════════════════════════════════════════"
+      echo " 📦 Published artifacts"
+      echo "───────────────────────────────────────────"
+      while IFS='|' read -r gid aid ver gpath ext has_module; do
+        [[ -z "$gid" ]] && continue
+        echo "  ${gid}:${aid}:${ver}"
+        echo "    ${MAVEN_URL}/${gpath}/${aid}/${ver}/${aid}-${ver}.pom"
+        echo "    ${MAVEN_URL}/${gpath}/${aid}/${ver}/${aid}-${ver}.${ext}"
+        if [[ "$has_module" == "module" ]]; then
+          echo "    ${MAVEN_URL}/${gpath}/${aid}/${ver}/${aid}-${ver}.module"
+        fi
+      done < "$SUMMARY_FILE"
+      echo "═══════════════════════════════════════════"
+
+      rm -f "$SUMMARY_FILE"
+
+      # Copy to dwtoveracode
+      mkdir -p dwtoveracode
+      [[ -d "${RELEASE_DIRECTORY}" && "$(ls -A ${RELEASE_DIRECTORY} 2>/dev/null)" ]] && cp -r ${RELEASE_DIRECTORY}/* dwtoveracode/
+
+      # Signal to skip run_pj_build and scan anchors
+      touch .sequential_publish_done
+      fi

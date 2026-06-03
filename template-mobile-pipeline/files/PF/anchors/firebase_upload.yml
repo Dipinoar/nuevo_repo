@@ -1,0 +1,81 @@
+# Upload APK to Firebase App Distribution
+.install_fastlane_firebase: &install_fastlane_firebase
+  before_script:
+    - |
+      echo "[INFO] Checking Fastlane gem"
+      gem --version
+      gem install fastlane fastlane-plugin-firebase_app_distribution --no-document
+
+.upload_to_firebase_dev: &upload_to_firebase_dev
+  script:
+    - |
+      set -eo pipefail
+
+      echo "[INFO] Loading secrets"
+      set -a
+      source secrets.env
+      set +a
+
+      echo "[INFO] Locating APK in ${RELEASE_PATH}"
+      APK_FILE=$(find "${RELEASE_PATH}" -name "${APK_SEARCH_PATTERN}" -type f | head -1)
+
+      if [ -z "${APK_FILE}" ]; then
+        echo "[ERROR] No APK found matching ${APK_SEARCH_PATTERN} in ${RELEASE_PATH}"
+        ls -lhR "${RELEASE_PATH}" || true
+        exit 1
+      fi
+
+      echo "============================================================"
+      echo "[INFO] ARTIFACT DETAILS - FIREBASE DEV UPLOAD"
+      echo "[INFO] File: $(basename "${APK_FILE}")"
+      echo "[INFO] Path: ${APK_FILE}"
+      echo "[INFO] Size: $(du -h "${APK_FILE}" | cut -f1)"
+      echo "[INFO] MD5:  $(md5sum "${APK_FILE}" | cut -d' ' -f1)"
+      echo "[INFO] FIREBASE_APP_ID: ${FIREBASE_APP_ID}"
+      echo "[INFO] FASTLANE_LANE: ${FASTLANE_LANE}"
+      echo "[INFO] Release notes: ${FIREBASE_RELEASE_NOTES}"
+      echo "============================================================"
+
+      echo "[INFO] Uploading APK to Firebase App Distribution"
+      cd "${CI_PROJECT_DIR}"
+      fastlane "${FASTLANE_LANE}" \
+        apk_path:"${APK_FILE}" \
+        release_notes:"${FIREBASE_RELEASE_NOTES}"
+
+.upload_to_firebase_qa: &upload_to_firebase_qa
+  script:
+    - |
+      set -eo pipefail
+
+      echo "[INFO] Loading secrets"
+      set -a
+      source secrets.env
+      set +a
+
+      echo "[INFO] Locating APK in ${RELEASE_PATH}"
+      APK_FILE=$(find "${RELEASE_PATH}" -name "${APK_SEARCH_PATTERN}" -type f | head -1)
+
+      if [ -z "${APK_FILE}" ]; then
+        echo "[ERROR] No APK found matching ${APK_SEARCH_PATTERN} in ${RELEASE_PATH}"
+        ls -lhR "${RELEASE_PATH}" || true
+        exit 1
+      fi
+
+      echo "============================================================"
+      echo "[INFO] ARTIFACT DETAILS - FIREBASE QA UPLOAD"
+      echo "[INFO] File: $(basename "${APK_FILE}")"
+      echo "[INFO] Path: ${APK_FILE}"
+      echo "[INFO] Size: $(du -h "${APK_FILE}" | cut -f1)"
+      echo "[INFO] MD5:  $(md5sum "${APK_FILE}" | cut -d' ' -f1)"
+      echo "[INFO] FIREBASE_APP_ID: ${FIREBASE_APP_ID}"
+      echo "[INFO] FASTLANE_LANE: ${FASTLANE_LANE}"
+      echo "[INFO] Distribution group: ${FIREBASE_GROUPS}"
+      echo "[INFO] Release notes: ${FIREBASE_RELEASE_NOTES}"
+      echo "============================================================"
+
+      echo "[INFO] Uploading APK to Firebase App Distribution"
+      cd "${CI_PROJECT_DIR}"
+      fastlane "${FASTLANE_LANE}" \
+        apk_path:"${APK_FILE}" \
+        groups:"${FIREBASE_GROUPS}" \
+        release_notes:"${FIREBASE_RELEASE_NOTES}"

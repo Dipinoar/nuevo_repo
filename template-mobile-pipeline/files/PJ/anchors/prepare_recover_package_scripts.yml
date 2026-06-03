@@ -1,0 +1,25 @@
+.prepare_recover_package_scripts: &prepare_recover_package_scripts
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO] Preparing Python environment and downloading dependencies..."
+            mkdir -p "$PIPELINE_LOCAL_SCRIPTS_FOLDER" && cd "$PIPELINE_LOCAL_SCRIPTS_FOLDER"
+
+            echo "[INFO] Downloading Python helper scripts from repository..."
+            curl -fL -o utils.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Futils.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download utils.py"
+            curl -fL -o gitlab_get_group_id.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_get_group_id.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_get_group_id.py"
+            curl -fL -o gitlab_upload_pom.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_pom.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_upload_pom.py"
+            curl -fL -o gitlab_upload_generic.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_generic.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_upload_generic.py"
+            curl -fL -o gitlab_get_package_files.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_get_package_files.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_get_package_files.py"
+            curl -fL -o gitlab_add_comment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_add_comment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download gitlab_add_comment.py"
+            curl -fL -o replace_pom_value.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Freplace_pom_value.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download replace_pom_value.py"
+            curl -fL -o get_pom_data.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fget_pom_data.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[WARN] Failed to download get_pom_data.py"
+            curl -fL -o enumerables.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenumerables.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download enumerables.py"
+            curl -fL -o environment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenvironment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download environment.py"
+            curl -fL -o yaml_to_env.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fyaml_to_env.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download yaml_to_env.py"
+            curl -fL -o summary.md --location --request GET "${PIPELINE_API_REPO_URL}/templates%2Fsummary.md/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download summary.md"
+            curl -fL -o retrieve_artifacts.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fretrieve_artifacts.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download retrieve_artifacts.py"
+            curl -fL -o read_secrets.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fread_secrets.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download read_secrets.py"
+            curl -fL -o add_signature_jarsigner.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fadd_signature_jarsigner.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download add_signature_jarsigner.py"

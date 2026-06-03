@@ -1,0 +1,10 @@
+# =============================================================================
+# Build AAB via Fastlane (GMS only)
+# Requires: FASTLANE_AAB_LANE, AAB_ENVIRONMENT, RELEASE_PATH
+# Requires: .install_fastlane and .resolve_env_files executed before
+# Requires: .downloads_fastlane_build_aab executed before
+# =============================================================================
+.fastlane_build_aab: &fastlane_build_aab
+  script:
+    - |
+      bash ./fastlane_build_aab.sh

@@ -1,0 +1,43 @@
+ci:
+  project:
+    # options: android | ios
+    os:
+    # type: application | library
+    type:
+    # Build and test can be an element or an array for the arguments
+    # ios: makefile, fastlane
+    # android: gradlew, fastlane
+    # string example: gradlew
+    # array example: [gradlew, assemble]
+    test:
+    build:
+    # Set java JDK version to use. Default for android: temurin-21
+    # options: java-latest, java-21, java-17, java-11, java-8, temurin-21
+    # Optional (can be removed)
+    # java-version:
+    # Set the commnand for release & which is the extension format.
+    # output: str | extension format
+    # release: str, list | command for release generation.
+    # pomgen: str, list | command for POM generation.
+    #publish:
+    #  output: aar
+    #  release: [ gradlew , assemble ]
+    #  pomgen: [ gradlew , generatePomFileForReleasePublication ]
+  variables:
+    # structure:
+    # VAR_NAME: "value" # This is a string as default
+    # type: string | environment
+    # value: string: data to put | environment: env_var to retrieve value. If it doesn't exist, the default value is blank.
+    # Examples:
+    # TEST1: "test1"
+    # TEST2:
+    #  type: string
+    #  value: "test2"
+    # TEST3:
+    #  type: environment
+    #  value: TEST1
+  artifacts:
+    # structure:
+    # - type: jfrog | gitlab #TODO: gitlab
+    #   source: jfrog: <repository>/<path>/<to>/<artifact>, gitlab: #TODO: gitlab
+    #   target: path/to/put/artifact

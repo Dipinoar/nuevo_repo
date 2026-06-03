@@ -1,0 +1,59 @@
+.setup_android_linux_env: &setup_android_linux_env
+  before_script:
+    - |
+      echo "[INFO] Ensuring pip is available for Veracode Python scripts"
+      if python3 -m pip --version >/dev/null 2>&1; then
+        echo "[INFO] pip already available"
+      elif command -v pip3 >/dev/null 2>&1; then
+        echo "[INFO] pip3 already available"
+      else
+        apt-get update -y && apt-get -y install python3-pip
+      fi
+    - |
+      echo "[INFO] Hotfixing Java Keystore for internal GitLab Maven registries..."
+      if command -v openssl >/dev/null 2>&1 && command -v keytool >/dev/null 2>&1; then
+        JDK_CACERTS_PATH=""
+
+        if [ -n "${JAVA_HOME:-}" ] && [ -d "${JAVA_HOME}/lib/security" ]; then
+          JDK_CACERTS_PATH="${JAVA_HOME}/lib/security/cacerts"
+        elif [ -d /usr/lib/jvm ]; then
+          JDK_CACERTS_PATH="$(find /usr/lib/jvm -path "*/lib/security/cacerts" 2>/dev/null | head -n 1 || true)"
+        fi
+
+        if [ -n "$JDK_CACERTS_PATH" ] && [ ! -f "$JDK_CACERTS_PATH" ]; then
+          echo "[WARN] Java cacerts file is missing or broken symlink at $JDK_CACERTS_PATH. Repairing..."
+          rm -f "$JDK_CACERTS_PATH" || true
+          mkdir -p "$(dirname "$JDK_CACERTS_PATH")"
+          if [ -f /etc/ssl/certs/adoptium/cacerts ]; then
+            cp /etc/ssl/certs/adoptium/cacerts "$JDK_CACERTS_PATH"
+          elif [ -f /etc/ssl/certs/java/cacerts ]; then
+            cp /etc/ssl/certs/java/cacerts "$JDK_CACERTS_PATH"
+          else
+            echo "[WARN] No source cacerts found to repair Java truststore."
+          fi
+        fi
+
+        KEYSTORE_DATABASES=()
+        if [ -n "$JDK_CACERTS_PATH" ] && [ -f "$JDK_CACERTS_PATH" ]; then
+          KEYSTORE_DATABASES+=("$JDK_CACERTS_PATH")
+        fi
+        for db in /etc/ssl/certs/java/cacerts /etc/ssl/certs/adoptium/cacerts; do
+          if [ -f "$db" ]; then
+            KEYSTORE_DATABASES+=("$db")
+          fi
+        done
+
+        openssl s_client -showcerts -connect gitlab.itauchile.cl:443 </dev/null 2>/dev/null \
+          | awk '/BEGIN CERTIFICATE/,/END CERTIFICATE/{ if(/BEGIN CERTIFICATE/){a++}; out="gitlab-cert-"a".crt"; print >out}'
+        for cert_file in gitlab-cert-*.crt; do
+          if [ -f "$cert_file" ]; then
+            for db in "${KEYSTORE_DATABASES[@]}"; do
+              keytool -import -trustcacerts -keystore "$db" -storepass changeit -noprompt -alias "gitlab-${cert_file}-${db//\//_}" -file "$cert_file" >/dev/null 2>&1 || true
+            done
+          fi
+        done
+        rm -f gitlab-cert-*.crt || true
+        echo "[INFO] Java Keystore hotfix completed."
+      else
+        echo "[WARN] openssl or keytool not found, skipping certificate hotfix."
+      fi

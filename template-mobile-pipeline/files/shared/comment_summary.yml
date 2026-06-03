@@ -1,0 +1,128 @@
+# Reusable BOM Comment Summary script block
+# Expects the following CI variables as implicit arguments:
+#   BOM_ARTIFACT_ID       — Maven artifact ID (e.g. core-native-bom, core-itau-bom)
+#   PACKAGES_MAVEN_NAME_SUFFIX — version suffix per environment (DEV_PREFIX / QA_PREFIX / "" for prod)
+#   TARGET_BRANCH         — branch name used to look up the last merged MR
+#   GITLAB_PACKAGE_TOKEN  — token for Package Registry API
+#   TOKEN_GITLAB          — token for MR comment API
+
+.build_mr_comment: &build_mr_comment
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      # ====== Resolve comment script path ======
+      if [ -f "$(pwd -P)/gitlab_add_comment.py" ]; then
+        COMMENT_PY="$(pwd -P)/gitlab_add_comment.py"
+      elif [ -f "$(pwd -P)/comment.py" ]; then
+        COMMENT_PY="$(pwd -P)/comment.py"
+      else
+        echo "[ERROR] No se encontró gitlab_add_comment.py ni comment.py en $(pwd -P)"
+        ls -la || true
+        exit 1
+      fi
+      echo "[INFO] Usando script de comentario: $COMMENT_PY"
+
+      # ====== Load version ======
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+      BOM_VERSION="${APP_VERSION:-unknown}${PACKAGES_MAVEN_NAME_SUFFIX}"
+      echo "[INFO] BOM_VERSION=${BOM_VERSION}"
+
+      # ====== Resolve Package Registry link ======
+      PACKAGE_LINK="${CI_SERVER_URL}/${CI_PROJECT_PATH}/-/packages"
+      PACKAGE_API_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages?package_name=${BOM_ARTIFACT_ID}&package_version=${BOM_VERSION}&per_page=1"
+      echo "[INFO] Looking up package at: ${PACKAGE_API_URL}"
+      PACKAGE_ID=$(curl -sS --header "PRIVATE-TOKEN: ${GITLAB_PACKAGE_TOKEN}" "${PACKAGE_API_URL}" \
+        | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['id'] if isinstance(data,list) and data else '')" 2>/dev/null || true)
+      if [[ -n "$PACKAGE_ID" ]]; then
+        PACKAGE_LINK="${CI_SERVER_URL}/${CI_PROJECT_PATH}/-/packages/${PACKAGE_ID}"
+        echo "[INFO] Package found: ${PACKAGE_LINK}"
+      else
+        echo "[WARN] Could not resolve package ID. Using packages listing URL."
+      fi
+
+      # ====== Parse POM to extract dependencies ======
+      POM_FILE=$(find "${CI_PROJECT_DIR}/bom-output/" -name "*.pom" | head -n 1)
+      if [[ -z "$POM_FILE" ]]; then
+        echo "[ERROR] No POM file found in bom-output/"
+        exit 1
+      fi
+      echo "[INFO] Parsing POM: $POM_FILE"
+
+      printf '%s\n' \
+        'import sys, xml.etree.ElementTree as ET' \
+        'tree = ET.parse(sys.argv[1])' \
+        'root = tree.getroot()' \
+        'ns = {"m": "http://maven.apache.org/POM/4.0.0"}' \
+        'rows = []' \
+        'for dep in root.findall(".//m:dependencyManagement/m:dependencies/m:dependency", ns):' \
+        '    gid = dep.findtext("m:groupId", "", ns)' \
+        '    aid = dep.findtext("m:artifactId", "", ns)' \
+        '    ver = dep.findtext("m:version", "", ns)' \
+        '    rows.append("| {0}:{1} | {2} |".format(gid, aid, ver))' \
+        'if rows:' \
+        '    print("| Dependency | Version |")' \
+        '    print("| --- | --- |")' \
+        '    print(chr(10).join(rows))' \
+        'else:' \
+        '    print("_No dependencies found in POM_")' \
+        > /tmp/parse_bom.py
+      DEPS_MD=$(python3 /tmp/parse_bom.py "$POM_FILE")
+
+      echo "[INFO] Dependencies Markdown:"
+      echo "$DEPS_MD"
+
+      # ====== Resolve MR IID ======
+      MR_IID="${CI_MERGE_REQUEST_IID:-}"
+      if [ -z "$MR_IID" ]; then
+        echo "[INFO] Not a merge request pipeline. Looking up the last merged MR into ${TARGET_BRANCH}."
+        MR_IID=$(curl -sS --header "PRIVATE-TOKEN: ${TOKEN_GITLAB}" \
+          "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests?target_branch=${TARGET_BRANCH}&state=merged&order_by=updated_at&sort=desc&per_page=1" \
+          | python3 -c "import sys,json; data=json.load(sys.stdin); print(data[0]['iid'] if data else '')" 2>/dev/null || true)
+        if [ -z "$MR_IID" ]; then
+          echo "[WARN] Could not find a merged MR for ${TARGET_BRANCH}. Skipping comment."
+          exit 0
+        fi
+        echo "[INFO] Found merged MR IID: ${MR_IID}"
+      fi
+
+      TEMPLATE_FILE="$(pwd -P)/mr_bom_summary.md"
+      printf '%s\n' \
+        '# :arrow_down_small: BOM Merge Request Summary' \
+        '' \
+        '## Last Pipeline:' \
+        '' \
+        '### [#:pipeline-id:](:pipeline-url:)' \
+        '' \
+        '## BOM Version: `:bom-version:`' \
+        '' \
+        '## Published Artifact:' \
+        '' \
+        ':package: [:bom-version:](:package-link:)' \
+        '' \
+        '## Dependencies:' \
+        ':dependencies-list:' \
+        > "$TEMPLATE_FILE"
+
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "[ERROR] python3 unavailable on the runner image."
+        exit 1
+      fi
+
+      # ====== Post comment ======
+      python3 "${COMMENT_PY}" \
+        -u "${CI_SERVER_URL}" \
+        -t "${TOKEN_GITLAB}" \
+        -p "${CI_PROJECT_ID}" \
+        -mr "${MR_IID}" \
+        -mf "${TEMPLATE_FILE}" \
+        -ml "pipeline-id:${CI_PIPELINE_ID}" \
+            "pipeline-url:${CI_PIPELINE_URL}" \
+            "bom-version:${BOM_VERSION}" \
+            "package-link:${PACKAGE_LINK}" \
+            "dependencies-list:$(printf '%b' "${DEPS_MD}")"

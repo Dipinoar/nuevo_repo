@@ -1,0 +1,834 @@
+# Android Itau BOM Pipeline
+# For cl-android-itau-bom repository (internal Itaú SDK dependencies)
+
+default:
+  tags:
+    - devsecops-common
+  image: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3
+
+stages:
+  - compliance
+  - prepare_pipeline
+  - calculate_version
+  - build
+  - upload
+  - summary
+
+variables:
+  ANDROID_PROJECT_PATH: "${CI_PROJECT_DIR}"
+  CI_PIPELINE_REPOSITORY: "arq-devops-team/pipelines-gitlab/template-mobile-pipeline"
+  CI_PIPELINE_REPOSITORY_DIR: "template-mobile-pipeline"
+  CI_PIPELINE_SCRIPTS: "files/PF/scripts"
+  PIPELINE_API_REPO_URL: "http://gitlab.itauchile.cl/api/v4/projects/${PIPELINE_REPO_ID}/repository/files"
+  PIPELINE_LOCAL_SCRIPTS_FOLDER: "pipeline-scripts"
+  PIPELINE_REPO_ID: 9393
+  RUNNER_DEFAULT_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-default-image:2.5.2-secure"
+  NODE_SECURE_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-node:24.11.0-secure"
+  BRANCH: "${CI_COMMIT_BRANCH}"
+  TARGET_BRANCH: "${CI_COMMIT_BRANCH}"
+  PIPELINE_BRANCH: "main"
+  DEV_PREFIX: "-development"
+  QA_PREFIX: "-quality"
+  # BOM-specific variables
+  BOM_GROUP_ID: "cl.itau"
+  BOM_ARTIFACT_ID: "core-itau-bom"
+
+include:
+  - local: 'files/shared/calculate_version.yml'
+  - local: 'files/shared/check_rebase.yml'
+  - local: 'files/shared/comment_summary.yml'
+  - local: 'files/shared/package_registry.yml'
+  - local: 'files/shared/reusable_commands.yml'
+  - local: 'files/shared/rules_components.yml'
+  # UPLOAD BOM DEV
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 5.2 Upload BOM to Package Registry DEV
+      target_project_id: ${CI_PROJECT_ID}
+      image: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*"
+      base_directory: "${CI_PROJECT_DIR}/bom-output"
+      package_type: "maven"
+      package_name: "cl/itau/${BOM_ARTIFACT_ID}"
+      package_version: "${APP_VERSION}${DEV_PREFIX}"
+      rules:
+        - !reference [.rules_commit_development, rules]
+      retry_max: 2
+  # UPLOAD BOM QA
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 5.3 Upload BOM to Package Registry QA
+      target_project_id: ${CI_PROJECT_ID}
+      image: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*"
+      base_directory: "${CI_PROJECT_DIR}/bom-output"
+      package_type: "maven"
+      package_name: "cl/itau/${BOM_ARTIFACT_ID}"
+      package_version: "${APP_VERSION}${QA_PREFIX}"
+      rules:
+        - !reference [.rules_mr_development_to_quality, rules]
+      retry_max: 2
+  # UPLOAD BOM PROD
+  - component: $CI_SERVER_FQDN/arq-devops-team/itau-components/componente-package-registry/uploadv2@main
+    inputs:
+      stage: upload
+      job_name: 5.4 Upload BOM to Package Registry PROD
+      target_project_id: ${CI_PROJECT_ID}
+      image: gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3
+      auth_method: "custom_token"
+      custom_token_var: "GITLAB_PACKAGE_TOKEN"
+      file_pattern: "*"
+      base_directory: "${CI_PROJECT_DIR}/bom-output"
+      package_type: "maven"
+      package_name: "cl/itau/${BOM_ARTIFACT_ID}"
+      package_version: "${APP_VERSION}"
+      rules:
+        - !reference [.rules_mr_quality_to_production, rules]
+      retry_max: 2
+
+before_script:
+  !reference [.before_pipeline, before_script]
+
+workflow:
+  rules:
+    # Block tags
+    - if: '$CI_COMMIT_TAG'
+      when: never
+
+    # MR from feature/bugfix/subfeature to development
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" && ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/.*$/ || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^bugfix\/.*$/ || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^subfeature\/.*$/)'
+      variables:
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # Post-merge: push to development (after MR lands)
+    - if: '$CI_COMMIT_BRANCH == "development"'
+      variables:
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+        BRANCH: "${CI_COMMIT_BRANCH}"
+        TARGET_BRANCH: "${CI_COMMIT_BRANCH}"
+      when: always
+
+    # MR from development to quality
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality"'
+      variables:
+        PACKAGES_MAVEN_NAME_SUFFIX: "${QA_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_QUALITY"
+        ENVIRONMENT: "quality"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # MR from quality to production
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"'
+      variables:
+        PACKAGES_MAVEN_NAME_SUFFIX: ""
+        ENVIRONMENT_SUFFIX: "_PRODUCTION"
+        ENVIRONMENT: "production"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # Catch-all
+    - when: never
+
+# Custom rule for feature/bugfix/subfeature to development
+.rules_mr_feature_bugfix_subfeature_to_development:
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" && ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature|bugfix|subfeature)\/.*$/))'
+
+# Custom rule for post-merge commits to development
+.rules_commit_development:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+
+# Custom rule for MR from development to quality
+.rules_mr_development_to_quality:
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality")'
+
+# Custom rule for post-merge commits to production
+.rules_commit_production:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "production"
+
+# Custom rule for MR from quality to production
+.rules_mr_quality_to_production:
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production")'
+
+#========================== PIPELINE STAGES ============================
+
+# ======================================================================
+# STAGE: compliance
+# ======================================================================
+1.1 Setting Compliance Variables:
+  stage: compliance
+  script:
+    - echo "COMPLIANCE_TECNOLOGY=mobile" >> compliance.env
+    - echo "COMPLIANCE_LANGUAGES=$CI_PROJECT_REPOSITORY_LANGUAGES" >> compliance.env
+    - echo "COMPLIANCE_PROJECT=$CI_PROJECT_PATH" >> compliance.env
+  artifacts:
+    reports:
+      dotenv: compliance.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+1.2 Validate Compliance:
+  stage: compliance
+  needs: [1.1 Setting Compliance Variables]
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/rule-validation
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  variables:
+    REPO_ID: $CI_PROJECT_ID
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: prepare_pipeline
+# ======================================================================
+2.1 Check Rebase Status:
+  stage: prepare_pipeline
+  script:
+    - !reference [.comment_mr_function, script]
+    - !reference [.validate_env_vars, script]
+    - !reference [.get_info_mr, script]
+    - !reference [.verify_conflicts, script]
+    - !reference [.verify_behind_commits, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_require_mr_id, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - when: never
+
+2.2 Prepare Remote:
+  stage: prepare_pipeline
+  needs:
+    - job: 2.1 Check Rebase Status
+      optional: true
+    - job: 1.2 Validate Compliance
+      optional: true
+  image: $RUNNER_DEFAULT_IMAGE
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+    - !reference [.update_apt, before_script]
+    - !reference [.get_chile_dependencies, before_script]
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Installing Python and dependencies"
+      apt -y install python3-pip
+      python3 -m pip install pyyaml -q
+
+      ROOT_DIR="$(pwd)"
+      CONFIG_FILE="$ROOT_DIR/ci/config.yaml"
+      ENV_FILE="$ROOT_DIR/build.env"
+
+      echo "[INFO] Validating config.yaml"
+      test -f "$CONFIG_FILE" || { echo "[ERROR] $CONFIG_FILE not found"; exit 1; }
+      echo "[INFO] Found $CONFIG_FILE"
+
+      echo "[INFO] Parsing ci/config.yaml"
+      GRADLE_VERSION=$(python3 -c "import yaml; c=yaml.safe_load(open('ci/config.yaml')); print(c.get('ci',{}).get('gradle','8.8'))")
+      TEMURIN_VERSION=$(python3 -c "import yaml; c=yaml.safe_load(open('ci/config.yaml')); print(c.get('ci',{}).get('temurin','21'))")
+
+      echo "GRADLE_VERSION=${GRADLE_VERSION}" > "$ENV_FILE"
+      echo "TEMURIN_VERSION=${TEMURIN_VERSION}" >> "$ENV_FILE"
+      echo "PIPELINE_ID=${CI_PIPELINE_ID}" >> "$ENV_FILE"
+
+      echo "[INFO] GRADLE_VERSION=${GRADLE_VERSION}"
+      echo "[INFO] TEMURIN_VERSION=${TEMURIN_VERSION}"
+      echo "[INFO] Showing build.env content"
+      cat "$ENV_FILE"
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - build.env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: calculate_version
+# ======================================================================
+3.1 Simulate Semantic Release:
+  stage: calculate_version
+  needs:
+    - job: 2.2 Prepare Remote
+      optional: true
+  image: $NODE_SECURE_IMAGE
+  variables:
+    GIT_DEPTH: "0"
+    SIMULATE_BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.simulate_semantic_release_with_tag, script]
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - when: never
+
+3.2 Semantic Release:
+  stage: calculate_version
+  needs:
+    - job: 2.2 Prepare Remote
+  image: $NODE_SECURE_IMAGE
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.downloads_releaserc_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Running Semantic Release (real)"
+      semantic-release --branches development
+
+      if [[ ! -f .app_version_env ]] || ! grep -q "APP_VERSION" .app_version_env 2>/dev/null; then
+        echo "[WARN] semantic-release did not produce a version."
+        echo "[INFO] Falling back to latest Git tag."
+        git fetch --tags --quiet
+        FALLBACK_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if [[ -n "$FALLBACK_TAG" ]]; then
+          VERSION="${FALLBACK_TAG#v}"
+          echo "[INFO] Using fallback version: ${VERSION}"
+          echo "APP_VERSION=${VERSION}" > .app_version_env
+          echo "VERSION_NAME=${VERSION}" >> .app_version_env
+        else
+          echo "[ERROR] No version could be determined from semantic-release or Git tags."
+          exit 1
+        fi
+      fi
+    - echo "[INFO] Show .app_version_env"
+    - cat .app_version_env
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_commit_development, rules]
+    - when: never
+
+3.3 Get Version from Tag:
+  stage: calculate_version
+  needs:
+    - job: 2.2 Prepare Remote
+  image: $RUNNER_DEFAULT_IMAGE
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+  script:
+    - !reference [.get_version_from_tag, script]
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: build
+# ======================================================================
+4.1 Gradle Build BOM DEV:
+  stage: build
+  needs:
+    - job: 2.2 Prepare Remote
+      artifacts: true
+    - job: 3.1 Simulate Semantic Release
+      artifacts: true
+      optional: true
+    - job: 3.2 Semantic Release
+      artifacts: true
+      optional: true
+  variables:
+    TARGET_BRANCH: "development"
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - |
+      echo "[INFO] Loading build.env"
+      if [[ -f build.env ]]; then
+        set -a
+        source build.env
+        set +a
+        echo "[INFO] GRADLE_VERSION=${GRADLE_VERSION}"
+        echo "[INFO] TEMURIN_VERSION=${TEMURIN_VERSION}"
+      else
+        echo "[ERROR] build.env not found"
+        exit 1
+      fi
+    - !reference [.update_apt, before_script]
+    - !reference [.update_java_temurin, before_script]
+    - !reference [.update_gradle_version, before_script]
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Loading environment files"
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+
+      echo "[INFO] APP_VERSION = ${APP_VERSION:-not set}"
+      echo "[INFO] Building Itau BOM: ${BOM_GROUP_ID}:${BOM_ARTIFACT_ID}"
+
+      echo "[INFO] Exporting environment variables"
+      export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+      . /etc/profile.d/gradle.sh
+
+      echo "[INFO] Running Gradle publish to local Maven (bom-development)"
+      ./gradlew :bom-development:publishToMavenLocal --no-daemon
+
+      echo "[INFO] Locating published BOM file in local Maven (.m2)"
+      BOM_VERSION="${APP_VERSION:-unknown}"
+      BOM_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.pom"
+
+      if [[ -f "$BOM_PATH" ]]; then
+        echo "--------------------------------"
+        echo "[INFO] BOM file path : $BOM_PATH"
+        echo "[INFO] BOM file size : $(du -sh "$BOM_PATH" | cut -f1)"
+        echo "[INFO] BOM XML contents:"
+        cat "$BOM_PATH"
+        echo "--------------------------------"
+      else
+        echo "[WARN] BOM file not found at expected path: $BOM_PATH"
+        echo "[INFO] Searching for any published POM under ~/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" 2>/dev/null | while read -r f; do
+          echo "[INFO] Found: $f ($(du -sh "$f" | cut -f1))"
+          cat "$f"
+        done
+      fi
+
+      echo "[INFO] Copying BOM POM and Module Metadata to bom-output/ for upload stage"
+      mkdir -p "${CI_PROJECT_DIR}/bom-output"
+      BOM_MODULE_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.module"
+      if [[ -f "$BOM_PATH" ]]; then
+        cp "$BOM_PATH" "${CI_PROJECT_DIR}/bom-output/"
+      else
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      if [[ -f "$BOM_MODULE_PATH" ]]; then
+        cp "$BOM_MODULE_PATH" "${CI_PROJECT_DIR}/bom-output/"
+        echo "[INFO] Gradle Module Metadata copied: ${BOM_MODULE_PATH}"
+      else
+        echo "[WARN] Gradle Module Metadata not found at: ${BOM_MODULE_PATH}"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.module" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      echo "[INFO] Files staged for upload:"
+      ls -lh "${CI_PROJECT_DIR}/bom-output/" || true
+
+      echo "--------------------------------"
+      echo "✅ Itau BOM build and publish to local Maven completed."
+      echo "   GroupId: ${BOM_GROUP_ID}"
+      echo "   ArtifactId: ${BOM_ARTIFACT_ID}"
+      echo "--------------------------------"
+  artifacts:
+    paths:
+      - build.env
+      - .app_version_env
+      - bom-output/
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_subfeature_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - when: never
+
+4.2 Gradle Build BOM QA:
+  stage: build
+  needs:
+    - job: 2.2 Prepare Remote
+      artifacts: true
+    - job: 3.3 Get Version from Tag
+      artifacts: true
+  variables:
+    TARGET_BRANCH: "quality"
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - |
+      echo "[INFO] Loading build.env"
+      if [[ -f build.env ]]; then
+        set -a
+        source build.env
+        set +a
+        echo "[INFO] GRADLE_VERSION=${GRADLE_VERSION}"
+        echo "[INFO] TEMURIN_VERSION=${TEMURIN_VERSION}"
+      else
+        echo "[ERROR] build.env not found"
+        exit 1
+      fi
+    - !reference [.update_apt, before_script]
+    - !reference [.update_java_temurin, before_script]
+    - !reference [.update_gradle_version, before_script]
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Loading environment files"
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+
+      echo "[INFO] APP_VERSION = ${APP_VERSION:-not set}"
+      echo "[INFO] Building Itau BOM (QA): ${BOM_GROUP_ID}:${BOM_ARTIFACT_ID}"
+
+      echo "[INFO] Exporting environment variables"
+      export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+      . /etc/profile.d/gradle.sh
+
+      echo "[INFO] Running Gradle publish to local Maven (bom-quality)"
+      ./gradlew :bom-quality:publishToMavenLocal --no-daemon
+
+      echo "[INFO] Locating published BOM file in local Maven (.m2)"
+      BOM_VERSION="${APP_VERSION:-unknown}-quality"
+      BOM_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.pom"
+
+      if [[ -f "$BOM_PATH" ]]; then
+        echo "--------------------------------"
+        echo "[INFO] BOM file path : $BOM_PATH"
+        echo "[INFO] BOM file size : $(du -sh "$BOM_PATH" | cut -f1)"
+        echo "[INFO] BOM XML contents:"
+        cat "$BOM_PATH"
+        echo "--------------------------------"
+      else
+        echo "[WARN] BOM file not found at expected path: $BOM_PATH"
+        echo "[INFO] Searching for any published POM under ~/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" 2>/dev/null | while read -r f; do
+          echo "[INFO] Found: $f ($(du -sh "$f" | cut -f1))"
+          cat "$f"
+        done
+      fi
+
+      echo "[INFO] Copying BOM POM and Module Metadata to bom-output/ for upload stage"
+      mkdir -p "${CI_PROJECT_DIR}/bom-output"
+      BOM_MODULE_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.module"
+      if [[ -f "$BOM_PATH" ]]; then
+        cp "$BOM_PATH" "${CI_PROJECT_DIR}/bom-output/"
+      else
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      if [[ -f "$BOM_MODULE_PATH" ]]; then
+        cp "$BOM_MODULE_PATH" "${CI_PROJECT_DIR}/bom-output/"
+        echo "[INFO] Gradle Module Metadata copied: ${BOM_MODULE_PATH}"
+      else
+        echo "[WARN] Gradle Module Metadata not found at: ${BOM_MODULE_PATH}"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.module" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      echo "[INFO] Files staged for upload:"
+      ls -lh "${CI_PROJECT_DIR}/bom-output/" || true
+
+      echo "--------------------------------"
+      echo "✅ Itau BOM QA build and publish to local Maven completed."
+      echo "   GroupId: ${BOM_GROUP_ID}"
+      echo "   ArtifactId: ${BOM_ARTIFACT_ID}"
+      echo "--------------------------------"
+  artifacts:
+    paths:
+      - build.env
+      - .app_version_env
+      - bom-output/
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - when: never
+
+4.3 Gradle Build BOM PROD:
+  stage: build
+  needs:
+    - job: 2.2 Prepare Remote
+      artifacts: true
+    - job: 3.3 Get Version from Tag
+      artifacts: true
+  variables:
+    TARGET_BRANCH: "production"
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - |
+      echo "[INFO] Loading build.env"
+      if [[ -f build.env ]]; then
+        set -a
+        source build.env
+        set +a
+        echo "[INFO] GRADLE_VERSION=${GRADLE_VERSION}"
+        echo "[INFO] TEMURIN_VERSION=${TEMURIN_VERSION}"
+      else
+        echo "[ERROR] build.env not found"
+        exit 1
+      fi
+    - !reference [.update_apt, before_script]
+    - !reference [.update_java_temurin, before_script]
+    - !reference [.update_gradle_version, before_script]
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Loading environment files"
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+
+      echo "[INFO] APP_VERSION = ${APP_VERSION:-not set}"
+      echo "[INFO] Building Itau BOM (PROD): ${BOM_GROUP_ID}:${BOM_ARTIFACT_ID}"
+
+      echo "[INFO] Exporting environment variables"
+      export ANDROID_SDK_ROOT=/usr/lib/android-sdk
+      . /etc/profile.d/gradle.sh
+
+      echo "[INFO] Running Gradle publish to local Maven (bom-production)"
+      ./gradlew :bom-production:publishToMavenLocal --no-daemon
+
+      echo "[INFO] Locating published BOM file in local Maven (.m2)"
+      BOM_VERSION="${APP_VERSION:-unknown}"
+      BOM_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.pom"
+
+      if [[ -f "$BOM_PATH" ]]; then
+        echo "--------------------------------"
+        echo "[INFO] BOM file path : $BOM_PATH"
+        echo "[INFO] BOM file size : $(du -sh "$BOM_PATH" | cut -f1)"
+        echo "[INFO] BOM XML contents:"
+        cat "$BOM_PATH"
+        echo "--------------------------------"
+      else
+        echo "[WARN] BOM file not found at expected path: $BOM_PATH"
+        echo "[INFO] Searching for any published POM under ~/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" 2>/dev/null | while read -r f; do
+          echo "[INFO] Found: $f ($(du -sh "$f" | cut -f1))"
+          cat "$f"
+        done
+      fi
+
+      echo "[INFO] Copying BOM POM and Module Metadata to bom-output/ for upload stage"
+      mkdir -p "${CI_PROJECT_DIR}/bom-output"
+      BOM_MODULE_PATH="${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/${BOM_VERSION}/${BOM_ARTIFACT_ID}-${BOM_VERSION}.module"
+      if [[ -f "$BOM_PATH" ]]; then
+        cp "$BOM_PATH" "${CI_PROJECT_DIR}/bom-output/"
+      else
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.pom" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      if [[ -f "$BOM_MODULE_PATH" ]]; then
+        cp "$BOM_MODULE_PATH" "${CI_PROJECT_DIR}/bom-output/"
+        echo "[INFO] Gradle Module Metadata copied: ${BOM_MODULE_PATH}"
+      else
+        echo "[WARN] Gradle Module Metadata not found at: ${BOM_MODULE_PATH}"
+        find "${HOME}/.m2/repository/$(echo ${BOM_GROUP_ID} | tr '.' '/')/${BOM_ARTIFACT_ID}/" -name "*.module" -exec cp {} "${CI_PROJECT_DIR}/bom-output/" \; 2>/dev/null
+      fi
+      echo "[INFO] Files staged for upload:"
+      ls -lh "${CI_PROJECT_DIR}/bom-output/" || true
+
+      echo "--------------------------------"
+      echo "✅ Itau BOM PROD build and publish to local Maven completed."
+      echo "   GroupId: ${BOM_GROUP_ID}"
+      echo "   ArtifactId: ${BOM_ARTIFACT_ID}"
+      echo "--------------------------------"
+  artifacts:
+    paths:
+      - build.env
+      - .app_version_env
+      - bom-output/
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: upload (override component-generated job to wire dependencies)
+# ======================================================================
+5.1 Check Existing Package:
+  stage: upload
+  needs:
+    - job: 4.1 Gradle Build BOM DEV
+      optional: true
+      artifacts: true
+    - job: 3.2 Semantic Release
+      optional: true
+      artifacts: true
+    - job: 4.2 Gradle Build BOM QA
+      optional: true
+      artifacts: true
+    - job: 4.3 Gradle Build BOM PROD
+      optional: true
+      artifacts: true
+  image: $RUNNER_DEFAULT_IMAGE
+  script:
+    - !reference [.check_existing_package, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+5.2 Upload BOM to Package Registry DEV:
+  needs:
+    - job: 5.1 Check Existing Package
+    - job: 4.1 Gradle Build BOM DEV
+      artifacts: true
+    - job: 3.2 Semantic Release
+      artifacts: true
+  artifacts:
+    paths:
+      - bom-output/
+    expire_in: 1 day
+
+5.3 Upload BOM to Package Registry QA:
+  needs:
+    - job: 5.1 Check Existing Package
+    - job: 4.2 Gradle Build BOM QA
+      artifacts: true
+    - job: 3.3 Get Version from Tag
+      artifacts: true
+  artifacts:
+    paths:
+      - bom-output/
+    expire_in: 1 day
+
+5.4 Upload BOM to Package Registry PROD:
+  needs:
+    - job: 5.1 Check Existing Package
+    - job: 4.3 Gradle Build BOM PROD
+      artifacts: true
+    - job: 3.3 Get Version from Tag
+      artifacts: true
+  artifacts:
+    paths:
+      - bom-output/
+    expire_in: 1 day
+
+# ======================================================================
+# STAGE: summary
+# ======================================================================
+6.1 Comment Summary:
+  stage: summary
+  image: $RUNNER_DEFAULT_IMAGE
+  needs:
+    - job: 3.2 Semantic Release
+      optional: true
+      artifacts: true
+    - job: 3.3 Get Version from Tag
+      optional: true
+      artifacts: true
+    - job: 4.1 Gradle Build BOM DEV
+      optional: true
+      artifacts: true
+    - job: 4.2 Gradle Build BOM QA
+      optional: true
+      artifacts: true
+    - job: 4.3 Gradle Build BOM PROD
+      optional: true
+      artifacts: true
+    - job: 5.2 Upload BOM to Package Registry DEV
+      optional: true
+    - job: 5.3 Upload BOM to Package Registry QA
+      optional: true
+    - job: 5.4 Upload BOM to Package Registry PROD
+      optional: true
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+  script:
+    - !reference [.downloads_dependencies, script]
+    - !reference [.prepare_requirements, script]
+    - !reference [.build_mr_comment, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never

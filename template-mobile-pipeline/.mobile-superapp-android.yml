@@ -1,0 +1,1475 @@
+# Android Superapp Pipeline GRADLE
+# v3.0 - Modularizado
+
+default:
+    tags:
+      - ec2-android
+    image: $RUNNER_ANDROID_SECURE
+
+stages:
+  - compliance
+  - prepare_pipeline
+  - calculate_version
+  - test
+  - build
+  - upload
+  - build_prod
+  - veracode
+  - upload_prod
+  - summary
+
+include:
+  - local: 'files/PF/yamls/.mobile-superapp-android-include.yml'
+
+before_script:
+    !reference [.before_pipeline, before_script]
+
+#========================== PIPELINE JOBS ============================
+
+# ======================================================================
+# STAGE: compliance
+# ======================================================================
+1.1 Setting Compliance Variables:
+  stage: compliance
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  script:
+    - echo "COMPLIANCE_TECNOLOGY=mobile" >> compliance.env
+    - echo "COMPLIANCE_LANGUAGES=$CI_PROJECT_REPOSITORY_LANGUAGES" >> compliance.env
+    - echo "COMPLIANCE_PROJECT=$CI_PROJECT_PATH" >> compliance.env
+  artifacts:
+    reports:
+      dotenv: compliance.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - when: always
+
+1.2 Validate Compliance:
+  stage: compliance
+  needs: [1.1 Setting Compliance Variables]
+  variables:
+    REPO_ID: $CI_PROJECT_ID
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/rule-validation
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - when: always
+
+# ======================================================================
+# STAGE: prepare_pipeline
+# ======================================================================
+2.1 No Protected Target Environment:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  variables:
+    MESSAGE: >
+      This merge request targets a non-protected environment (*${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*).<br>
+      Please ensure merges follow the authorized flow: *feature/bugfix → development → quality → production*.
+  script:
+    - !reference [.current_dir, script]
+    - printenv
+    - !reference [.create_directory, script]
+    - !reference [.downloads_utils_dependency, script]
+    - !reference [.downloads_comment_dependency, script]
+    - !reference [.prepare_requirements_summary, script]
+    - !reference [.return_to_pipeline_dir, script]
+    - !reference [.comment_to_mr, script]
+  rules:
+    - if: $MERGE_REQUEST_NOT_PROTECTED == "true"
+    - when: never
+
+2.2 Blocked Merge Request:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  interruptible: false
+  variables:
+    MESSAGE: >
+      This merge request has been blocked due to unauthorized source/target combination:<br>
+      *${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}* → *${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*.<br>
+      Only merges from *feature/bugfix* to *development*, *development* to *quality* and from *quality* to *production* are allowed.
+  script:
+    - !reference [.current_dir, script]
+    - printenv
+    - !reference [.create_directory, script]
+    - !reference [.downloads_utils_dependency, script]
+    - !reference [.downloads_comment_dependency, script]
+    - !reference [.prepare_requirements_summary, script]
+    - !reference [.return_to_pipeline_dir, script]
+    - !reference [.comment_to_mr, script]
+    - exit 1
+  rules:
+    - if: $MERGE_REQUEST_BLOCKED == "true"
+    - when: never
+
+2.3 Check Rebase Status:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  script:
+    - !reference [.comment_mr_function, script]
+    - !reference [.validate_env_vars, script]
+    - !reference [.get_info_mr, script]
+    - !reference [.verify_conflicts, script]
+    - !reference [.verify_behind_commits, script]
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_skip_unofficial_to_production, rules]
+    - !reference [.rules_require_mr_id, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+2.4 Prepare Remote:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.3 Check Rebase Status
+      optional: true
+    - job: 1.2 Validate Compliance
+      optional: true
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+    - !reference [.superapp_prepare_remote_runtime, before_script]
+  script:
+    - !reference [.downloads_read_config, script]
+    - !reference [.prepare_remote_env, script]
+    - printenv
+  artifacts:
+    reports:
+      dotenv: build.env
+    paths:
+      - build.env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+
+2.5 Retrieve Firebase Secrets:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_AWS_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  script:
+    - !reference [.retrieve_firebase_secrets, script]
+  artifacts:
+    name: "Secrets"
+    access: none
+    paths:
+      - secrets.env
+    reports:
+      dotenv: secrets.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - when: never
+  allow_failure: true
+
+2.6 Retrieve Signing Keys:
+  stage: prepare_pipeline
+  tags:
+    - devsecops-common
+  image: $RUNNER_AWS_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  script:
+    - !reference [.retrieve_signing_keys, script]
+  artifacts:
+    name: "Signing Keys"
+    access: none
+    paths:
+      - signing_keys.env
+    reports:
+      dotenv: signing_keys.env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: calculate_version
+# ======================================================================
+3.1 Calculate Beta Version:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+    - git fetch --all --tags --prune --quiet
+  script:
+    - !reference [.check_beta_number, script]
+    - !reference [.get_tag_source_branch, script]
+    - !reference [.get_available_tags, script]
+    - !reference [.get_max_beta_number, script]
+    - !reference [.calculate_beta_plus_one, script]
+    - !reference [.create_artifacts, script]
+    - !reference [.export_to_env, script]
+  after_script:
+    - !reference [.latest_verification, script]
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+
+3.2 Simulate Semantic Release:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $NODE_SECURE_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.downloads_deploytestrc_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO!] Simulate Semantic Release"
+
+      OUTPUT=$(semantic-release --dry-run --no-ci --branches "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME")
+      echo "$OUTPUT"
+
+      VERSION=$(echo "$OUTPUT" | grep -o "he next release version is [0-9]*\.[0-9]*\.[0-9]*" | awk '{print $6}' || true)
+
+      echo "APP_VERSION=${VERSION}" >> .app_version_env
+      echo "VERSION_NAME=${VERSION}" >> .app_version_env
+      echo "BASE_VERSION=${VERSION}" >> .app_version_env
+      echo "VERSION_WITH_V=v${VERSION}" >> .app_version_env
+    - echo "[INFO] Show .app_version_env"
+    - cat .app_version_env
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - when: never
+
+3.3 Semantic Release:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $NODE_SECURE_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.downloads_semantic_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      chmod +x semantic_release.sh
+      ./semantic_release.sh
+  script:
+    - !reference [.downloads_releaserc_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      semantic-release
+
+    - echo "[INFO] Show .app_version_env"
+    - cat .app_version_env
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_commit_development, rules]
+    - when: never
+
+3.4 Get Version:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $NODE_SECURE_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+      optional: true
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      VERSION=$(git tag --contains $(git rev-parse --short HEAD) | grep -v 'b[0-9]\+$' | cut -d 'v' -f2 | head -n 1)
+      if [[ $VERSION == "" ]]; then
+        echo "[ERROR!] No version has been defined for this commit."
+        exit 1
+      fi
+      echo "APP_VERSION=${VERSION}" >> .app_version_env
+      echo "VERSION_WITH_V=v${VERSION}" >> .app_version_env
+      echo "VERSION_NAME=${VERSION}" >> .app_version_env
+      echo "BASE_VERSION=${VERSION}" >> .app_version_env
+    - cat .app_version_env
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+
+3.5 Get Version Code:
+  stage: calculate_version
+  needs:
+    - job: 2.4 Prepare Remote
+  before_script:
+    - !reference [.install_fastlane, before_script]
+    - !reference [.decode_google_play_credentials, before_script]
+  script:
+    - !reference [.get_play_version_code, script]
+  after_script:
+    - rm -f "${CI_PROJECT_DIR}/google-play-credentials.json"
+  artifacts:
+    paths:
+      - .version_code_env
+    reports:
+      dotenv: .version_code_env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+
+3.6 Hotfix Semantic Release:
+  stage: calculate_version
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+  variables:
+    GIT_DEPTH: "0"
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+  script:
+    - !reference [.hotfix_semantic_version, script]
+  artifacts:
+    paths:
+      - .app_version_env
+    reports:
+      dotenv: .app_version_env
+    expire_in: 1 day
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - when: never
+
+# ======================================================================
+# STAGE: test
+# ======================================================================
+4.1 Gradle Test:
+  stage: test
+  needs:
+    - job: 2.4 Prepare Remote
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - !reference [.superapp_android_runtime, before_script]
+  script:
+    - !reference [.gradle_detekt_test, script]
+  artifacts:
+    paths:
+      - test.txt
+      - test.html
+      - test.json
+      - build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_commit_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+# ======================================================================
+# STAGE: build
+# ======================================================================
+# 5.1 Gradle Build DEV:
+#   stage: build
+#   needs:
+#     - job: 2.4 Prepare Remote
+#     - job: 4.1 Gradle Test
+#     - job: 3.1 Calculate Beta Version
+#     - job: 3.5 Get Version Code
+#   variables:
+#     TARGET_BRANCH: "development"
+#     APK_FILTER_NAME: "development"
+#     APK_SEARCH_SUBDIR: "debug"
+#   before_script:
+#     - !reference [.before_pipeline, before_script]
+#     - !reference [.superapp_android_runtime, before_script]
+#   script:
+#     - !reference [.resolve_env_files, script]
+#     - !reference [.prepare_debug_keystore, script]
+#     - !reference [.downloads_parametrized_build_google, script]
+#     - !reference [.downloads_parametrized_build_huawei, script]
+#     - !reference [.run_parametrized_builds, script]
+#     - |
+#       echo "[INFO] Final APK list in ${RELEASE_PATH}:"
+#       ls -lh "${RELEASE_PATH}" || true
+#   artifacts:
+#     paths:
+#       - "${RELEASE_PATH}/*development*.apk"
+#       - build.env
+#     reports:
+#       dotenv: build.env
+#     expire_in: 1 day
+#   retry:
+#     max: 2
+#     when:
+#       - script_failure
+#       - runner_system_failure
+#       - stuck_or_timeout_failure
+#       - api_failure
+#       - scheduler_failure
+#   rules:
+#     - if: $BUILD_DEV == "false"
+#       when: never
+#     - !reference [.rules_skip_on_tag, rules]
+#     - !reference [.rules_mr_feature_bugfix_to_development, rules]
+#     - when: never
+#   allow_failure: true
+
+# 5.2 Fastlane Build QA AAB:
+#   stage: build
+#   needs:
+#     - job: 2.4 Prepare Remote
+#     - job: 2.6 Retrieve Signing Keys
+#     - job: 3.4 Get Version
+#       optional: true
+#     - job: 3.6 Hotfix Semantic Release
+#       optional: true
+#     - job: 3.5 Get Version Code
+#     - job: 4.1 Gradle Test
+#   variables:
+#     FASTLANE_AAB_LANE: "build_qa_aab"
+#     AAB_ENVIRONMENT: "quality"
+#   before_script:
+#     - !reference [.before_pipeline, before_script]
+#     - !reference [.superapp_android_runtime, before_script]
+#     - !reference [.install_fastlane, before_script]
+#   script:
+#     - !reference [.resolve_env_files, script]
+#     - !reference [.prepare_quality_keystore, script]
+#     - !reference [.downloads_fastlane_build_aab, script]
+#     - !reference [.fastlane_build_aab, script]
+#   artifacts:
+#     paths:
+#       - "${RELEASE_PATH}/*quality*.aab"
+#       - build.env
+#     reports:
+#       dotenv: build.env
+#     expire_in: 1 day
+#   retry:
+#     max: 2
+#     when:
+#       - script_failure
+#       - runner_system_failure
+#       - stuck_or_timeout_failure
+#       - api_failure
+#       - scheduler_failure
+#   rules:
+#     - !reference [.rules_skip_on_tag, rules]
+#     - !reference [.rules_mr_development_to_quality, rules]
+#     - !reference [.rules_mr_hotfix_to_quality, rules]
+#     - when: never
+#   allow_failure: true
+
+# 5.3 Gradle Build QA:
+#   stage: build
+#   needs:
+#     - job: 2.4 Prepare Remote
+#     - job: 2.6 Retrieve Signing Keys
+#     - job: 3.1 Calculate Beta Version
+#       optional: true
+#     - job: 3.4 Get Version
+#       optional: true
+#     - job: 3.6 Hotfix Semantic Release
+#       optional: true
+#     - job: 3.5 Get Version Code
+#     - job: 4.1 Gradle Test
+#     - job: 5.1 Gradle Build DEV
+#       optional: true
+#     - job: 5.2 Fastlane Build QA AAB
+#       optional: true
+#   variables:
+#     TARGET_BRANCH: "quality"
+#     APK_FILTER_NAME: "quality"
+#     APK_SEARCH_SUBDIR: "homolog"
+#   before_script:
+#     - !reference [.before_pipeline, before_script]
+#     - !reference [.superapp_android_runtime, before_script]
+#   script:
+#     - !reference [.resolve_env_files, script]
+#     - !reference [.prepare_quality_keystore, script]
+#     - !reference [.downloads_parametrized_build_google, script]
+#     - !reference [.downloads_parametrized_build_huawei, script]
+#     - !reference [.run_parametrized_builds, script]
+#     - |
+#       echo "[INFO] Final APK list in ${RELEASE_PATH}:"
+#       ls -lh "${RELEASE_PATH}" || true
+#   artifacts:
+#     paths:
+#       - "${RELEASE_PATH}/*quality*.apk"
+#       - build.env
+#     reports:
+#       dotenv: build.env
+#     expire_in: 1 day
+#   retry:
+#     max: 2
+#     when:
+#       - script_failure
+#       - runner_system_failure
+#       - stuck_or_timeout_failure
+#       - api_failure
+#       - scheduler_failure
+#   rules:
+#     - !reference [.rules_skip_on_tag, rules]
+#     - !reference [.rules_mr_feature_bugfix_to_development, rules]
+#     - !reference [.rules_mr_development_to_quality, rules]
+#     - !reference [.rules_mr_hotfix_to_quality, rules]
+#     - when: never
+
+# 5.4 Guardsquare Instrumented QA:
+#   stage: build
+#   tags:
+#     - devsecops-common
+#   image: $RUNNER_ANDROID_IMAGE
+#   needs:
+#     - job: 2.4 Prepare Remote
+#     - job: 2.6 Retrieve Signing Keys
+#     - job: 3.1 Calculate Beta Version
+#       optional: true
+#     - job: 3.4 Get Version
+#       optional: true
+#     - job: 3.5 Get Version Code
+#     - job: 4.1 Gradle Test
+#     - job: 5.2 Fastlane Build QA AAB
+#       optional: true
+#     - job: 5.3 Gradle Build QA
+#       optional: true
+#   variables:
+#     ANDROID_HOME: "/usr/lib/android-sdk"
+#     ANDROID_SDK_ROOT: "/usr/lib/android-sdk"
+#     GUARDSQUARE_TYPE: "instrumented"
+#     GUARDSQUARE_ENV: "quality"
+#   before_script:
+#     - !reference [.guardsquare_setup, before_script]
+#   script:
+#     - !reference [.guardsquare_run, script]
+#   artifacts:
+#     paths:
+#       - "${RELEASE_PATH}/*.apk"
+#   retry:
+#     max: 2
+#     when:
+#       - script_failure
+#       - runner_system_failure
+#       - stuck_or_timeout_failure
+#       - api_failure
+#       - scheduler_failure
+#   rules:
+#     - !reference [.rules_instrumented_to_development, rules]
+#     - !reference [.rules_instrumented_to_quality, rules]
+#     - when: never
+#   allow_failure: true
+
+5.5 Guardsquare Protected QA:
+  stage: build
+  # tags:
+  #   - devsecops-common
+  # image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.6 Retrieve Signing Keys
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.5 Get Version Code
+    - job: 4.1 Gradle Test
+    - job: 5.2 Fastlane Build QA AAB
+      optional: true
+    - job: 5.3 Gradle Build QA
+      optional: true
+    - job: 5.4 Guardsquare Instrumented QA
+      optional: true
+  variables:
+    # ANDROID_HOME: "/usr/lib/android-sdk"
+    # ANDROID_SDK_ROOT: "/usr/lib/android-sdk"
+    GUARDSQUARE_TYPE: "protected"
+    GUARDSQUARE_ENV: "quality"
+  before_script:
+    - !reference [.guardsquare_setup, before_script]
+  script:
+    - !reference [.guardsquare_run, script]
+  artifacts:
+    paths:
+      - "${RELEASE_PATH}/*.aab"
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_protected_to_development, rules]
+    - !reference [.rules_protected_hotfix_to_quality, rules]
+    - !reference [.rules_protected_to_quality, rules]
+    - when: never
+  allow_failure: true
+
+# ======================================================================
+# STAGE: upload
+# ======================================================================
+6.1 Upload DEV to Package Registry:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 5.1 Gradle Build DEV
+      optional: true
+    - job: 3.1 Calculate Beta Version
+  allow_failure: true
+
+6.2 Upload QA to Package Registry:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 5.3 Gradle Build QA
+      optional: true
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.6 Hotfix Semantic Release
+      optional: true
+  allow_failure: true
+
+6.3 Upload DEV to Firebase:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.5 Retrieve Firebase Secrets
+    - job: 5.1 Gradle Build DEV
+      optional: true
+  variables:
+    FIREBASE_APP_ID: "${FIREBASE_DEV_APP_ID}"
+    APK_SEARCH_PATTERN: "*gms*development*.apk"
+    FASTLANE_LANE: "upload_dev_to_firebase"
+    FIREBASE_RELEASE_NOTES: "DEV build ${CI_PIPELINE_ID} from branch ${BRANCH}"
+  before_script:
+    - !reference [.install_fastlane_firebase, before_script]
+  script:
+    - !reference [.upload_to_firebase_dev, script]
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $BUILD_DEV == "false"
+      when: never
+    - if: $MAKE_REBASE == "true"
+      when: never
+    - if: $FIREBASE_UPLOAD_STEP == "false"
+      when: never
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - when: never
+  allow_failure: true
+
+6.4 Upload QA to Firebase:
+  stage: upload
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.5 Retrieve Firebase Secrets
+    - job: 5.3 Gradle Build QA
+      optional: true
+  variables:
+    FIREBASE_APP_ID: "${FIREBASE_QUALITY_APP_ID}"
+    FIREBASE_GROUPS: "QA_testers"
+    APK_SEARCH_PATTERN: "*gms*quality*.apk"
+    FASTLANE_LANE: "upload_qa_to_firebase"
+    FIREBASE_RELEASE_NOTES: "QA build ${CI_PIPELINE_ID} from branch ${BRANCH}"
+  before_script:
+    - !reference [.install_fastlane_firebase, before_script]
+  script:
+    - !reference [.upload_to_firebase_qa, script]
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $MAKE_REBASE == "true"
+      when: never
+    - if: $FIREBASE_UPLOAD_STEP == "false"
+      when: never
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - when: never
+  allow_failure: true
+
+6.5 Upload QA AAB to Package Registry:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.6 Hotfix Semantic Release
+      optional: true
+    - job: 5.2 Fastlane Build QA AAB
+      optional: true
+  allow_failure: true
+
+6.6 Deploy QA AAB to Google Play:
+  stage: upload
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 5.2 Fastlane Build QA AAB
+      optional: true
+  before_script:
+    - !reference [.install_fastlane, before_script]
+    - !reference [.decode_google_play_credentials, before_script]
+  script:
+    - !reference [.downloads_deploy_qa_aab_google_play, script]
+    - !reference [.deploy_qa_aab_to_google_play, script]
+  after_script:
+    - |
+      echo "[INFO] Cleaning up Google Play credentials"
+      rm -f "${CI_PROJECT_DIR}/google-play-credentials.json"
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $GOOGLE_PLAY_DEPLOY_STEP == "false"
+      when: never
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - when: never
+  allow_failure: true
+
+6.7 Upload QA Instrumented to Package Registry:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 5.4 Guardsquare Instrumented QA
+      optional: true
+  allow_failure: true
+
+6.8 Upload QA Protected to Package Registry:
+  stage: upload
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 5.5 Guardsquare Protected QA
+  allow_failure: true
+
+# ======================================================================
+# STAGE: build_prod
+# ======================================================================
+7.1 Fastlane Build PROD AAB:
+  stage: build_prod
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.6 Retrieve Signing Keys
+    - job: 4.1 Gradle Test
+      optional: true
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.5 Get Version Code
+  variables:
+    FASTLANE_AAB_LANE: "build_prod_aab"
+    AAB_ENVIRONMENT: "production"
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - !reference [.superapp_android_runtime, before_script]
+    - !reference [.install_fastlane, before_script]
+  script:
+    - !reference [.resolve_env_files, script]
+    - !reference [.prepare_release_keystore, script]
+    - !reference [.downloads_fastlane_build_aab, script]
+    - !reference [.fastlane_build_aab, script]
+  artifacts:
+    paths:
+      - "${RELEASE_PATH}/*production*.aab"
+      - build.env
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+7.2 Gradle Build PROD:
+  stage: build_prod
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.6 Retrieve Signing Keys
+    - job: 4.1 Gradle Test
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.5 Get Version Code
+    - job: 7.1 Fastlane Build PROD AAB
+  variables:
+    TARGET_BRANCH: "production"
+    APK_FILTER_NAME: "production"
+    APK_SEARCH_SUBDIR: "release"
+  before_script:
+    - !reference [.before_pipeline, before_script]
+    - !reference [.superapp_android_runtime, before_script]
+  script:
+    - !reference [.resolve_env_files, script]
+    - !reference [.prepare_release_keystore, script]
+    - !reference [.downloads_parametrized_build_google, script]
+    - !reference [.downloads_parametrized_build_huawei, script]
+    - !reference [.run_parametrized_builds, script]
+    - !reference [.rename_unofficial_apks, script]
+    - |
+      echo "[INFO] Final APK list in ${RELEASE_PATH}:"
+      ls -lh "${RELEASE_PATH}" || true
+  artifacts:
+    paths:
+      - "${RELEASE_PATH}/*production*.apk"
+      - build.env
+    reports:
+      dotenv: build.env
+    expire_in: 1 day
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+7.3 Guardsquare Instrumented PROD:
+  stage: build_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.6 Retrieve Signing Keys
+    - job: 3.4 Get Version
+    - job: 3.5 Get Version Code
+    - job: 4.1 Gradle Test
+    - job: 7.1 Fastlane Build PROD AAB
+      optional: true
+    - job: 7.2 Gradle Build PROD
+      optional: true
+  variables:
+    ANDROID_HOME: "/usr/lib/android-sdk"
+    ANDROID_SDK_ROOT: "/usr/lib/android-sdk"
+    GUARDSQUARE_TYPE: "instrumented"
+    GUARDSQUARE_ENV: "production"
+  before_script:
+    - !reference [.guardsquare_setup, before_script]
+  script:
+    - !reference [.guardsquare_run, script]
+  artifacts:
+    paths:
+      - "${RELEASE_PATH}/*.apk"
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - !reference [.rules_instrumented_to_production, rules]
+    - when: never
+  allow_failure: true
+
+7.4 Guardsquare Protected PROD:
+  stage: build_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 2.6 Retrieve Signing Keys
+    - job: 3.4 Get Version
+    - job: 3.5 Get Version Code
+    - job: 4.1 Gradle Test
+    - job: 7.1 Fastlane Build PROD AAB
+      optional: true
+    - job: 7.2 Gradle Build PROD
+      optional: true
+    - job: 7.3 Guardsquare Instrumented PROD
+      optional: true
+  variables:
+    ANDROID_HOME: "/usr/lib/android-sdk"
+    ANDROID_SDK_ROOT: "/usr/lib/android-sdk"
+    GUARDSQUARE_TYPE: "protected"
+    GUARDSQUARE_ENV: "production"
+  before_script:
+    - !reference [.guardsquare_setup, before_script]
+  script:
+    - !reference [.guardsquare_run, script]
+  artifacts:
+    paths:
+      - "${RELEASE_PATH}/*.aab"
+  rules:
+    - !reference [.rules_protected_to_production, rules]
+    - when: never
+  allow_failure: true
+
+# ======================================================================
+# STAGE: veracode
+# ======================================================================
+8.1 Prepare files for Veracode (Google):
+  stage: veracode
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 5.1 Gradle Build DEV
+      optional: true
+    - job: 5.3 Gradle Build QA
+      optional: true
+    - job: 7.2 Gradle Build PROD
+      optional: true
+  variables:
+    VERACODE_PROVIDER_FLAG: "android-gms"
+    VERACODE_PROVIDER_SUFFIX: "GMS"
+  script:
+    - !reference [.downloads_veracode_move_files, script]
+    - !reference [.veracode_prepare_metadata, script]
+  artifacts:
+    paths:
+        - ./${VERACODE_DIR_NAME}/*gms*.apk
+    reports:
+      dotenv: build.env
+    expire_in: 2 hour
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $GOOGLE_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_development, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+8.2 Prepare files for Veracode (Huawei):
+  stage: veracode
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 5.1 Gradle Build DEV
+      optional: true
+    - job: 5.3 Gradle Build QA
+      optional: true
+    - job: 7.2 Gradle Build PROD
+      optional: true
+  variables:
+    VERACODE_PROVIDER_FLAG: "android-hms"
+    VERACODE_PROVIDER_SUFFIX: "HMS"
+  script:
+    - !reference [.downloads_veracode_move_files, script]
+    - !reference [.veracode_prepare_metadata, script]
+  artifacts:
+    paths:
+        - ./${VERACODE_DIR_NAME}/*hms*.apk
+    reports:
+      dotenv: build.env
+    expire_in: 2 hour
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $HUAWEI_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_development, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+8.3 Send to Veracode (Google):
+  stage: veracode
+  needs:
+    - job: 8.1 Prepare files for Veracode (Google)
+      optional: true
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - if: $GOOGLE_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_development, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_noveracode_production, rules]
+    - !reference [.rules_noveracode_unofficial, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+8.4 Send to Veracode (Huawei):
+  stage: veracode
+  needs:
+    - job: 8.2 Prepare files for Veracode (Huawei)
+      optional: true
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - if: $HUAWEI_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_development, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_noveracode_production, rules]
+    - !reference [.rules_noveracode_unofficial, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never
+  allow_failure: true
+
+8.5 Prepare files for Veracode (AAB):
+  stage: veracode
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.6 Hotfix Semantic Release
+      optional: true
+    - job: 5.2 Fastlane Build QA AAB
+      optional: true
+    - job: 7.1 Fastlane Build PROD AAB
+      optional: true
+  variables:
+    VERACODE_PROVIDER_FLAG: "android-gms-aab"
+    VERACODE_PROVIDER_SUFFIX: "GMS-AAB"
+  script:
+    - !reference [.downloads_veracode_move_files_aab, script]
+    - !reference [.veracode_prepare_metadata_aab, script]
+  artifacts:
+    paths:
+        - ./${VERACODE_DIR_NAME}/*gms*.aab
+    reports:
+      dotenv: build.env
+    expire_in: 2 hour
+  retry:
+    max: 2
+    when:
+      - script_failure
+      - runner_system_failure
+      - stuck_or_timeout_failure
+      - api_failure
+      - scheduler_failure
+  rules:
+    - if: $GOOGLE_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+  allow_failure: true
+
+8.6 Send to Veracode (AAB):
+  stage: veracode
+  needs:
+    - job: 8.5 Prepare files for Veracode (AAB)
+  trigger:
+    project: arq-devops-team/pipelines-gitlab/template-pipeline-veracode
+    branch: main
+    strategy: depend
+    forward:
+      yaml_variables: true
+      pipeline_variables: true
+  rules:
+    - if: $GOOGLE_VERACODE_STEP == "false"
+      when: never
+    - !reference [.rules_veracodeoff, rules]
+    - !reference [.rules_noveracode_quality, rules]
+    - !reference [.rules_noveracode_hotfix, rules]
+    - !reference [.rules_noveracode_production, rules]
+    - !reference [.rules_noveracode_unofficial, rules]
+    - !reference [.rules_make_rebase, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+  allow_failure: true
+
+# ======================================================================
+# STAGE: upload_prod
+# ======================================================================
+9.1 Upload PROD to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.4 Get Version
+    - job: 7.2 Gradle Build PROD
+    - job: 8.3 Send to Veracode (Google)
+      optional: true
+    - job: 8.4 Send to Veracode (Huawei)
+      optional: true
+
+9.2 Upload PROD Unofficial to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.1 Calculate Beta Version
+    - job: 7.2 Gradle Build PROD
+    - job: 8.3 Send to Veracode (Google)
+      optional: true
+    - job: 8.4 Send to Veracode (Huawei)
+      optional: true
+
+9.3 Deploy PROD to Google Play:
+  stage: upload_prod
+  needs:
+    - job: 2.4 Prepare Remote
+    - job: 7.1 Fastlane Build PROD AAB
+    - job: 8.6 Send to Veracode (AAB)
+      optional: true
+  before_script:
+    - !reference [.install_fastlane, before_script]
+    - !reference [.decode_google_play_credentials, before_script]
+  script:
+    - !reference [.downloads_deploy_prod_aab_google_play, script]
+    - !reference [.deploy_to_google_play, script]
+  after_script:
+    - |
+      echo "[INFO] Cleaning up Google Play credentials"
+      rm -f "${CI_PROJECT_DIR}/google-play-credentials.json"
+  rules:
+    - if: $GOOGLE_PLAY_DEPLOY_STEP == "false"
+      when: never
+    - !reference [.rules_mr_quality_to_production, rules]
+    - when: never
+  allow_failure: true
+
+9.4 Upload PROD AAB to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.4 Get Version
+    - job: 7.1 Fastlane Build PROD AAB
+    - job: 8.6 Send to Veracode (AAB)
+      optional: true
+
+9.5 Upload PROD AAB Unofficial to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.1 Calculate Beta Version
+    - job: 7.1 Fastlane Build PROD AAB
+    - job: 8.6 Send to Veracode (AAB)
+      optional: true
+
+9.6 Upload PROD Instrumented to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.4 Get Version
+    - job: 7.3 Guardsquare Instrumented PROD
+
+9.7 Upload PROD Protected to Package Registry:
+  stage: upload_prod
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_IMAGE
+  needs:
+    - job: 3.4 Get Version
+    - job: 7.4 Guardsquare Protected PROD
+
+# ======================================================================
+# STAGE: summary
+# ======================================================================
+10.1 Comment Summary:
+  stage: summary
+  tags:
+    - devsecops-common
+  image: $RUNNER_ANDROID_SECURE
+  needs:
+    # Version info
+    - job: 3.1 Calculate Beta Version
+      optional: true
+    - job: 3.4 Get Version
+      optional: true
+    - job: 3.6 Hotfix Semantic Release
+      optional: true
+    # DEV/QA uploads
+    - job: 6.1 Upload DEV to Package Registry
+      optional: true
+    - job: 6.2 Upload QA to Package Registry
+      optional: true
+    - job: 6.3 Upload DEV to Firebase
+      optional: true
+    - job: 6.4 Upload QA to Firebase
+      optional: true
+    - job: 6.5 Upload QA AAB to Package Registry
+      optional: true
+    - job: 6.6 Deploy QA AAB to Google Play
+      optional: true
+    - job: 6.7 Upload QA Instrumented to Package Registry
+      optional: true
+    - job: 6.8 Upload QA Protected to Package Registry
+      optional: true
+    # Veracode prepare (non-blocking for DEV/QA, already blocking for PROD via upload needs)
+    - job: 8.1 Prepare files for Veracode (Google)
+      optional: true
+    - job: 8.2 Prepare files for Veracode (Huawei)
+      optional: true
+    - job: 8.5 Prepare files for Veracode (AAB)
+      optional: true
+    # PROD uploads (these already wait for Send to Veracode)
+    - job: 9.1 Upload PROD to Package Registry
+      optional: true
+    - job: 9.2 Upload PROD Unofficial to Package Registry
+      optional: true
+    - job: 9.3 Deploy PROD to Google Play
+      optional: true
+    - job: 9.4 Upload PROD AAB to Package Registry
+      optional: true
+    - job: 9.5 Upload PROD AAB Unofficial to Package Registry
+      optional: true
+    - job: 9.6 Upload PROD Instrumented to Package Registry
+      optional: true
+    - job: 9.7 Upload PROD Protected to Package Registry
+      optional: true
+  before_script:
+    - !reference [.git_auth, before_script]
+    - !reference [.before_pipeline, before_script]
+  script:
+    - !reference [.downloads_enumerables_dependency, script]
+    - !reference [.downloads_environment_dependency, script]
+    - !reference [.downloads_summary_dependency, script]
+    - !reference [.downloads_dependencies, script]
+    - !reference [.prepare_requirements_summary, script]
+    - !reference [.resolve_comment_script, script]
+    - !reference [.build_artifacts_markdown, script]
+    - !reference [.post_comment_to_mr, script]
+  rules:
+    - if: $MAKE_REBASE == "true"
+      when: never
+    - !reference [.rules_skip_on_tag, rules]
+    - !reference [.rules_mr_feature_bugfix_to_development, rules]
+    - !reference [.rules_mr_development_to_quality, rules]
+    - !reference [.rules_mr_hotfix_to_quality, rules]
+    - !reference [.rules_mr_quality_to_production, rules]
+    - !reference [.rules_mr_unofficial_to_production, rules]
+    - when: never

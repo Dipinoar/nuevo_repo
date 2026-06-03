@@ -1,0 +1,52 @@
+.release_android_application: &release_android_application
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' project?"
+            if [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG && $PIPELINE_PROJECT_TYPE == $APPLICATION_PROJECT_FLAG ]]; then
+                echo "[INFO!] Yes."
+
+                CURRENT_DIR=$(pwd)
+
+                mkdir -p "$PIPELINE_LOCAL_SCRIPTS_FOLDER"
+                cd "$PIPELINE_LOCAL_SCRIPTS_FOLDER"
+
+                curl -fL -o utils.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Futils.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download utils.py"
+                curl -fL -o enumerables.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenumerables.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download enumerables.py"
+                curl -fL -o environment.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fenvironment.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download environment.py"
+                curl -fL -o add_signature_jarsigner.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fadd_signature_jarsigner.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download add_signature_jarsigner.py"
+
+                python3 -m pip install --upgrade pip
+                echo -e "boto3==1.39.8\npython-gitlab==6.1.0\npython-dotenv==1.1.1\nPyYAML==6.0.3\nStrEnum==0.4.15" > requirements.txt
+                python3 -m pip install -r requirements.txt || {
+                    echo "[WARN] Pinned install failed (likely Python version mismatch). Retrying without pins..."
+                    echo -e "boto3\npython-gitlab\npython-dotenv\nPyYAML\nStrEnum" > requirements.txt
+                    python3 -m pip install -r requirements.txt
+                }
+
+                cd "$CURRENT_DIR"
+
+                grep_eval=$(echo "${!PIPELINE_PROJECT_PUBLISH_FOLDER_REF}" | tr -d \')
+
+                echo "[INFO!] Searching files with extension '*.${!PIPELINE_PROJECT_PUBLISH_OUTPUT}' using grep ${grep_eval}"
+
+                files_found=$(find "." \( -name "*.${!PIPELINE_PROJECT_PUBLISH_OUTPUT}" -and -not -path "*.gradle*" \) | eval "grep ${grep_eval}" || true)
+
+                if [[ -z "$files_found" ]]; then
+                    echo "[ERROR] No files found matching pattern and grep criteria"
+                    exit 1
+                fi
+
+                echo "$files_found" | while read -r gen_file; do
+                    echo "[INFO!] Found $gen_file"
+                    python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/add_signature_jarsigner.py" "$gen_file"
+
+                    TARGET_DIR="${EFFECTIVE_RELEASE_DIR:-${RELEASE_DIRECTORY}}"
+                    mkdir -p "${TARGET_DIR}"
+                    cp "$gen_file" "${TARGET_DIR}"
+                done
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' process."
+            fi

@@ -1,0 +1,144 @@
+# PF Superapp compatibility layer to reuse Android runtime anchors from NUEVO_PIPE/PJ.
+# Expected imports before using .superapp_android_runtime:
+# - .set_java_version
+# - .setup_android_linux_env
+# - .download_cacerts
+
+.superapp_prepare_remote_runtime: &superapp_prepare_remote_runtime
+  before_script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Validating Python runtime in secure Android runner"
+      if ! command -v python3 >/dev/null 2>&1; then
+        echo "[ERROR] python3 is not available in the runner image."
+        exit 1
+      fi
+
+      python3 --version
+
+      if python3 -m pip --version >/dev/null 2>&1; then
+        echo "[INFO] pip already available"
+      elif command -v pip3 >/dev/null 2>&1; then
+        echo "[INFO] pip3 already available"
+      else
+        echo "[WARN] pip is not available in the runner image."
+        echo "[WARN] Prepare Remote must avoid installing packages through APT on this runner."
+      fi
+
+.superapp_android_anchor_compat: &superapp_android_anchor_compat
+  before_script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      export ANDROID_PROJECT_FLAG="${ANDROID_PROJECT_FLAG:-android}"
+      export PIPELINE_PROJECT_OS="${PIPELINE_PROJECT_OS:-${ANDROID_PROJECT_FLAG}}"
+      export PIPELINE_PROJECT_JAVA_VERSION="${PIPELINE_PROJECT_JAVA_VERSION:-temurin-${TEMURIN_VERSION:-21}}"
+      export ANDROID_HOME="${ANDROID_HOME:-/opt/android-sdk}"
+      export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME}}"
+
+      echo "[INFO] Superapp Android compatibility variables:"
+      echo "[INFO]   PIPELINE_PROJECT_OS=${PIPELINE_PROJECT_OS}"
+      echo "[INFO]   PIPELINE_PROJECT_JAVA_VERSION=${PIPELINE_PROJECT_JAVA_VERSION}"
+      echo "[INFO]   ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}"
+
+.superapp_ensure_android_sdk: &superapp_ensure_android_sdk
+  before_script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      SDK_PATH="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/opt/android-sdk}}"
+      export ANDROID_HOME="${SDK_PATH}"
+      export ANDROID_SDK_ROOT="${SDK_PATH}"
+
+      if [ ! -d "${SDK_PATH}" ]; then
+        echo "[ERROR] Android SDK directory not found at ${SDK_PATH}"
+        exit 1
+      fi
+
+      printf "sdk.dir=%s\n" "${SDK_PATH}" > local.properties
+      echo "[INFO] Android SDK configured at ${SDK_PATH}"
+      echo "[INFO] local.properties generated for Gradle"
+
+.superapp_prepare_gradle_cli_compat: &superapp_prepare_gradle_cli_compat
+  before_script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Preparing Gradle CLI compatibility for Superapp"
+      if [ -f "${CI_PROJECT_DIR}/gradlew" ]; then
+        echo "[INFO] gradlew found. Prioritizing project wrapper over runner Gradle."
+        chmod +x "${CI_PROJECT_DIR}/gradlew"
+        mkdir -p "${CI_PROJECT_DIR}/.ci-bin"
+        printf '%s\n' '#!/usr/bin/env bash' 'set -e' "exec \"${CI_PROJECT_DIR}/gradlew\" \"\$@\"" > "${CI_PROJECT_DIR}/.ci-bin/gradle"
+        chmod +x "${CI_PROJECT_DIR}/.ci-bin/gradle"
+        export PATH="${CI_PROJECT_DIR}/.ci-bin:${PATH}"
+      fi
+
+      WRAPPER_USER="${ANDROID_ARTIFACT_PULL_USER:-}"
+      WRAPPER_PASSWORD="${ANDROID_ARTIFACT_PULL_USER_TOKEN:-}"
+
+      if [ -z "${WRAPPER_PASSWORD}" ] && [ -n "${CI_JOB_TOKEN:-}" ]; then
+        WRAPPER_USER="gitlab-ci-token"
+        WRAPPER_PASSWORD="${CI_JOB_TOKEN}"
+        echo "[INFO] Wrapper credentials not provided by config. Falling back to CI_JOB_TOKEN."
+      fi
+
+      if [ -n "${WRAPPER_PASSWORD}" ]; then
+        if [ -z "${WRAPPER_USER}" ]; then
+          WRAPPER_USER="gitlab-ci-token"
+        fi
+
+        mkdir -p "${HOME}/.gradle"
+        printf '%s\n' \
+          "systemProp.gradle.wrapperUser=${WRAPPER_USER}" \
+          "systemProp.gradle.wrapperPassword=${WRAPPER_PASSWORD}" \
+          > "${HOME}/.gradle/gradle.properties"
+        chmod 600 "${HOME}/.gradle/gradle.properties" || true
+
+        echo "[INFO] Wrapper credentials configured for Gradle distribution download"
+        echo "[INFO] - wrapperUser=${WRAPPER_USER}"
+        echo "[INFO] - wrapperPassword=(len=${#WRAPPER_PASSWORD})"
+      else
+        echo "[WARN] Wrapper credentials are empty. Private Gradle distributions may fail with 401."
+      fi
+
+      if command -v gradle >/dev/null 2>&1; then
+        GRADLE_BIN="$(command -v gradle)"
+        GRADLE_BIN_DIR="$(dirname "${GRADLE_BIN}")"
+        if [ "${GRADLE_BIN}" = "${CI_PROJECT_DIR}/.ci-bin/gradle" ]; then
+          GRADLE_HOME_CANDIDATE="${CI_PROJECT_DIR}"
+        else
+          GRADLE_HOME_CANDIDATE="$(cd "${GRADLE_BIN_DIR}/.." && pwd -P)"
+        fi
+
+        echo "[INFO] Writing /etc/profile.d/gradle.sh compatibility profile for active Gradle"
+        mkdir -p /etc/profile.d
+        printf '%s\n' \
+          "export GRADLE_HOME=\"${GRADLE_HOME_CANDIDATE}\"" \
+          "export PATH=\"${GRADLE_BIN_DIR}:\$PATH\"" \
+          > /etc/profile.d/gradle.sh
+
+        . /etc/profile.d/gradle.sh || true
+      fi
+
+      if command -v gradle >/dev/null 2>&1; then
+        echo "[INFO] Active Gradle executable: $(command -v gradle)"
+        gradle -v | head -n 10 || true
+      else
+        echo "[WARN] No gradle executable is available."
+        echo "[WARN] PF jobs that invoke 'gradle' directly will still fail unless the image already provides it."
+      fi
+
+.superapp_android_runtime: &superapp_android_runtime
+  before_script:
+    - !reference [.superapp_android_anchor_compat, before_script]
+    - !reference [.set_java_version, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.superapp_prepare_gradle_cli_compat, before_script]
+    - !reference [.download_cacerts, before_script]
+    - !reference [.superapp_ensure_android_sdk, before_script]

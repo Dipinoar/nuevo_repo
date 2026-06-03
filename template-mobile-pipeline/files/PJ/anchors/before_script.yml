@@ -1,0 +1,12 @@
+.before_android: &before_android
+    before_script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO] Libraries installed from default image"
+            if command -v git >/dev/null 2>&1 && command -v update-ca-certificates >/dev/null 2>&1; then
+                echo "[INFO] git and ca-certificates already available. Skipping APT installation."
+            else
+                apt-get update && apt-get install -y --no-install-recommends git-core ca-certificates
+            fi

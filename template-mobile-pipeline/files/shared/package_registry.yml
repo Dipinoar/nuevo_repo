@@ -1,0 +1,82 @@
+# Reusable script block for checking if a BOM package version already exists
+# in the GitLab Package Registry before uploading.
+# Expects the following CI variables as implicit arguments:
+#   BOM_ARTIFACT_ID            — Maven artifact ID (e.g. core-native-bom, core-itau-bom)
+#   PACKAGES_MAVEN_NAME_SUFFIX — version suffix per environment (DEV_PREFIX / QA_PREFIX / "" for prod)
+#   GITLAB_PACKAGE_TOKEN       — token for Package Registry API
+
+.check_existing_package: &check_existing_package
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+
+      FULL_VERSION="${APP_VERSION}${PACKAGES_MAVEN_NAME_SUFFIX}"
+      echo "[INFO] Checking if package version already exists in GitLab Package Registry"
+      PACKAGE_CHECK_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages?package_name=cl/itau/${BOM_ARTIFACT_ID}&package_version=${FULL_VERSION}"
+      echo "[INFO] GET ${PACKAGE_CHECK_URL}"
+      EXISTING_PACKAGES=$(curl -s --header "PRIVATE-TOKEN: ${GITLAB_PACKAGE_TOKEN}" "${PACKAGE_CHECK_URL}")
+      PACKAGE_COUNT=$(echo "${EXISTING_PACKAGES}" | python3 -c "import sys,json; data=json.load(sys.stdin); print(len(data) if isinstance(data, list) else 0)" 2>/dev/null || echo "0")
+      if [[ "${PACKAGE_COUNT}" -gt "0" ]]; then
+        echo "--------------------------------"
+        echo "[ERROR] Package ${BOM_ARTIFACT_ID} version ${FULL_VERSION} already exists in the Package Registry."
+        echo "[ERROR] Refusing to overwrite. Bump the version or delete the existing package first."
+        echo "--------------------------------"
+        exit 1
+      fi
+      echo "[INFO] No existing package found. Proceeding with upload."
+
+# Reusable script block for downloading an existing BOM POM and Gradle Module Metadata
+# from the GitLab Package Registry.
+# Used by native-bom pipeline to reuse previously uploaded artifacts across environments
+# (e.g. download the DEV artifacts for QA upload, or the QA artifacts for PROD upload).
+# Expects the following CI variables as implicit arguments:
+#   BOM_ARTIFACT_ID          — Maven artifact ID (e.g. core-native-bom)
+#   DOWNLOAD_VERSION_SUFFIX  — version suffix of the source package to download (e.g. -development or -quality)
+#   GITLAB_PACKAGE_TOKEN     — token for Package Registry API
+
+.download_existing_package: &download_existing_package
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      if [[ -f .app_version_env ]]; then
+        set -a
+        source .app_version_env
+        set +a
+      fi
+
+      echo "[INFO] Downloading existing BOM package: ${BOM_ARTIFACT_ID} version ${APP_VERSION}${DOWNLOAD_VERSION_SUFFIX}"
+
+      BASE_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/maven/cl/itau/${BOM_ARTIFACT_ID}/${APP_VERSION}${DOWNLOAD_VERSION_SUFFIX}"
+      mkdir -p "${CI_PROJECT_DIR}/bom-output"
+
+      # Download POM
+      POM_URL="${BASE_URL}/${BOM_ARTIFACT_ID}-${APP_VERSION}.pom"
+      echo "[INFO] GET ${POM_URL}"
+      curl -fL --header "PRIVATE-TOKEN: ${GITLAB_PACKAGE_TOKEN}" \
+        "${POM_URL}" \
+        -o "${CI_PROJECT_DIR}/bom-output/${BOM_ARTIFACT_ID}-${APP_VERSION}.pom"
+
+      # Download Gradle Module Metadata
+      MODULE_URL="${BASE_URL}/${BOM_ARTIFACT_ID}-${APP_VERSION}.module"
+      echo "[INFO] GET ${MODULE_URL}"
+      HTTP_CODE=$(curl -sL -w "%{http_code}" --header "PRIVATE-TOKEN: ${GITLAB_PACKAGE_TOKEN}" \
+        "${MODULE_URL}" \
+        -o "${CI_PROJECT_DIR}/bom-output/${BOM_ARTIFACT_ID}-${APP_VERSION}.module")
+      if [[ "${HTTP_CODE}" -eq 200 ]]; then
+        echo "[INFO] Downloaded Gradle Module Metadata successfully."
+      else
+        echo "[WARN] Gradle Module Metadata not found (HTTP ${HTTP_CODE}). Continuing with POM only."
+        rm -f "${CI_PROJECT_DIR}/bom-output/${BOM_ARTIFACT_ID}-${APP_VERSION}.module"
+      fi
+
+      echo "[INFO] Downloaded BOM artifacts to bom-output/"
+      ls -lh "${CI_PROJECT_DIR}/bom-output/"

@@ -1,0 +1,432 @@
+.check_beta_number: &check_beta_number
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo "----------------------------------------"
+      echo "[INFO] Checking if the current commit has a beta tag..."
+      echo "----------------------------------------"
+
+      CURRENT_COMMIT="$(git rev-parse HEAD)"
+      echo "[INFO] Current commit: $CURRENT_COMMIT"
+
+      CURRENT_TAGS="$(git tag --points-at "$CURRENT_COMMIT" 2>/dev/null || echo "")"
+      CURRENT_BETA_TAG=""
+      HAS_CURRENT_BETA=false
+
+      if [ -n "$CURRENT_TAGS" ]; then
+        echo "[INFO] Tags found on the current commit:"
+        for tag in $CURRENT_TAGS; do
+          echo "  - $tag"
+          if echo "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$'; then
+            CURRENT_BETA_TAG="$tag"
+            HAS_CURRENT_BETA=true
+            echo "[INFO] Beta tag found: $CURRENT_BETA_TAG"
+            break
+          fi
+        done
+      else
+        echo "[INFO] No tags found on the current commit"
+      fi
+
+      echo "[INFO] Result: HAS_CURRENT_BETA=$HAS_CURRENT_BETA"
+      export CURRENT_COMMIT HAS_CURRENT_BETA CURRENT_BETA_TAG
+
+.get_tag_source_branch: &get_tag_source_branch
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Getting the latest base version tag..."
+      echo "----------------------------------------"
+
+      SOURCE_BRANCH="${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME:-$CI_COMMIT_REF_NAME}"
+      echo "[INFO] Source branch: $SOURCE_BRANCH"
+
+      # Traer tags por si acaso
+      git fetch --tags --quiet || true
+
+      # Helper: tomar SOLO vX.Y.Z (sin sufijos), ya ordenado desc.
+      pick_latest_base() {
+        # lee de stdin, devuelve la primera línea que cumpla regex exacto
+        grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1
+      }
+
+      # 1) Mergeado en origin/$SOURCE_BRANCH (orden desc por versión)
+      CANDIDATES="$(git tag --merged "origin/$SOURCE_BRANCH" --list 'v*' --sort=-v:refname 2>/dev/null || true)"
+      LATEST_VERSION="$({ echo "$CANDIDATES" | pick_latest_base; } || true)"
+
+      # 2) Fallback mergeado en rama local si no hay remoto o no hay coincidencias
+      if [ -z "$LATEST_VERSION" ]; then
+        CANDIDATES_LOCAL="$(git tag --merged "$SOURCE_BRANCH" --list 'v*' --sort=-v:refname 2>/dev/null || true)"
+        LATEST_VERSION="$({ echo "$CANDIDATES_LOCAL" | pick_latest_base; } || true)"
+      fi
+
+      # 3) Fallback global por versión si aún no hay nada
+      if [ -z "$LATEST_VERSION" ]; then
+        CANDIDATES_GLOBAL="$(git tag --list 'v*' --sort=-v:refname 2>/dev/null || true)"
+        LATEST_VERSION="$({ echo "$CANDIDATES_GLOBAL" | pick_latest_base; } || true)"
+        if [ -n "$LATEST_VERSION" ]; then
+          echo "[INFO] Using global semantic tag: $LATEST_VERSION"
+        else
+          LATEST_VERSION="v1.0.0"
+          echo "[WARN] No version tags found, using initial version: $LATEST_VERSION"
+        fi
+      else
+        echo "[INFO] Latest base version tag found: $LATEST_VERSION"
+      fi
+
+      # Seguridad extra: si por alguna razón llega algo tipo vX.Y.ZbN, recortarlo a vX.Y.Z
+      LATEST_VERSION="$(echo "$LATEST_VERSION" | sed -E 's/^(v[0-9]+\.[0-9]+\.[0-9]+)b[0-9]+$/\1/')"
+
+      LATEST_TAG="$LATEST_VERSION"
+      BASE_VERSION_NO_V="${LATEST_VERSION#v}"
+
+      echo "[INFO] FINAL BASE VERSION (with v): $LATEST_VERSION"
+      echo "[INFO] FINAL BASE VERSION (no  v): $BASE_VERSION_NO_V"
+
+      export SOURCE_BRANCH LATEST_VERSION LATEST_TAG BASE_VERSION_NO_V
+
+.get_available_tags: &get_available_tags
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Filtering beta tags for version $LATEST_VERSION globally..."
+      echo "----------------------------------------"
+
+      # Listar betas de esa base. Si 'sort -V' no existe, no cortar el job.
+      VERSION_BETA_TAGS="$(
+        git tag -l "${LATEST_VERSION}b*" 2>/dev/null | (sort -V 2>/dev/null || cat) || true
+      )"
+
+      if [ -n "$VERSION_BETA_TAGS" ]; then
+        echo "[INFO] Beta tags found for version $LATEST_VERSION:"
+        echo "$VERSION_BETA_TAGS"
+        BETA_COUNT="$(echo "$VERSION_BETA_TAGS" | wc -l)"
+        echo "[INFO] Total beta tags: $BETA_COUNT"
+      else
+        echo "[INFO] No beta tags found for version $LATEST_VERSION"
+      fi
+
+      export VERSION_BETA_TAGS
+
+.get_max_beta_number: &get_max_beta_number
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Calculating the next beta number..."
+      echo "----------------------------------------"
+
+      MAX_BETA_NUMBER=0
+      MAX_BETA_TAG=""
+
+      if [ -n "$VERSION_BETA_TAGS" ]; then
+        for beta_tag in $VERSION_BETA_TAGS; do
+          # Tomar el número después de la 'b' al final
+          BETA_N="$(echo "$beta_tag" | sed -E 's/.*b([0-9]+)$/\1/')"
+          if echo "$BETA_N" | grep -qE '^[0-9]+$'; then
+            if [ "$BETA_N" -gt "$MAX_BETA_NUMBER" ]; then
+              MAX_BETA_NUMBER="$BETA_N"
+              MAX_BETA_TAG="$beta_tag"
+            fi
+          fi
+        done
+        echo "[INFO] HIGHEST bN FOUND: b$MAX_BETA_NUMBER"
+      else
+        echo "[INFO] No previous betas found, N = 0"
+      fi
+
+      export MAX_BETA_NUMBER MAX_BETA_TAG
+
+.calculate_beta_plus_one: &calculate_beta_plus_one
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Calculating new beta tag..."
+      echo "----------------------------------------"
+
+      # Si el commit tiene beta: validamos si pertenece a LA MISMA base version
+      if [ "$HAS_CURRENT_BETA" = "true" ]; then
+
+        # Base del beta actual del commit (ej: v6.48.2b3 → 6.48.2)
+        CURRENT_BASE="$(echo "$CURRENT_BETA_TAG" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)b[0-9]+$/\1/')"
+
+        if [ "$CURRENT_BASE" = "$BASE_VERSION_NO_V" ]; then
+          # -----------------------------------------
+          # ✔️ El beta del commit pertenece a la misma versión → se actualiza
+          # -----------------------------------------
+          CURRENT_N="$(echo "$CURRENT_BETA_TAG" | sed -E 's/.*b([0-9]+)$/\1/')"
+          NEW_N=$(( CURRENT_N + 1 ))
+          ACTION="UPDATE"
+          echo "[INFO] Commit beta belongs to same base version ($CURRENT_BASE)."
+          echo "[INFO] Updating from current beta: b$CURRENT_N -> b$NEW_N"
+
+        else
+          # -----------------------------------------
+          # ❌ El beta del commit es de otra familia → se IGNORA
+          # -----------------------------------------
+          echo "[INFO] Ignoring commit beta tag $CURRENT_BETA_TAG (belongs to $CURRENT_BASE, expected $BASE_VERSION_NO_V)"
+
+          if echo "${IOS_PROJECT_FLAG:-}" | grep -qi '^ios$'; then
+            if [ "$MAX_BETA_NUMBER" -le 1 ]; then
+              MAX_BETA_NUMBER=1
+              NEW_N=2
+            else
+              NEW_N=$(( MAX_BETA_NUMBER + 1 ))
+            fi
+          else
+            if [ "$MAX_BETA_NUMBER" -eq 0 ]; then
+              NEW_N=1
+            else
+              NEW_N=$(( MAX_BETA_NUMBER + 1 ))
+            fi
+          fi
+
+          ACTION="CREATE"
+          echo "[INFO] Creating new beta for base version $BASE_VERSION_NO_V: b$NEW_N"
+        fi
+
+      else
+        # -----------------------------------------
+        # No existe beta en el commit → crear uno nuevo según reglas
+        # -----------------------------------------
+        if echo "${IOS_PROJECT_FLAG:-}" | grep -qi '^ios$'; then
+          if [ "$MAX_BETA_NUMBER" -le 1 ]; then
+            MAX_BETA_NUMBER=1
+            NEW_N=2
+          else
+            NEW_N=$(( MAX_BETA_NUMBER + 1 ))
+          fi
+        else
+          if [ "$MAX_BETA_NUMBER" -eq 0 ]; then
+            NEW_N=1
+          else
+            NEW_N=$(( MAX_BETA_NUMBER + 1 ))
+          fi
+        fi
+
+        ACTION="CREATE"
+        echo "[INFO] Creating new beta: b$MAX_BETA_NUMBER -> b$NEW_N"
+      fi
+
+
+      # -----------------------------------------
+      # Generación del nuevo tag final
+      # -----------------------------------------
+      NEW_BETA_NO_V="${BASE_VERSION_NO_V}b${NEW_N}"   # ej: 6.42.5b32
+      NEW_BETA_TAG="v${NEW_BETA_NO_V}"                # ej: v6.42.5b32
+
+      echo "[INFO] Initial tag calculated (with v): $NEW_BETA_TAG"
+      echo "[INFO] Initial tag (no v): $NEW_BETA_NO_V"
+
+      # Evitar colisión remota/local
+      while git tag | grep -q "^${NEW_BETA_TAG}$" || git ls-remote --tags origin | grep -q "refs/tags/${NEW_BETA_TAG}$"; do
+        echo "[WARN] Tag $NEW_BETA_TAG exists locally or remotely. Incrementing..."
+        NEW_N=$(( NEW_N + 1 ))
+        NEW_BETA_NO_V="${BASE_VERSION_NO_V}b${NEW_N}"
+        NEW_BETA_TAG="v${NEW_BETA_NO_V}"
+        echo "[INFO] Trying next tag: $NEW_BETA_TAG"
+      done
+
+      TAG_MESSAGE="Beta ${NEW_BETA_TAG}
+      Pipeline: #$CI_PIPELINE_ID
+      URL: $CI_PIPELINE_URL
+      Branch: $CI_COMMIT_REF_NAME
+      Commit: $(git rev-parse --short HEAD)
+      Triggered by: ${GITLAB_USER_NAME:-unknown}
+      Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+      git tag -a "$NEW_BETA_TAG" -m "$TAG_MESSAGE"
+
+      echo "[INFO] Created tag info:"
+      git show "$NEW_BETA_TAG" --no-patch --format=fuller
+
+      git remote set-url origin "https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+      git config --global http.sslVerify false
+      echo "[INFO] Pushing tag $NEW_BETA_TAG to remote..."
+      git push origin "$NEW_BETA_TAG" || { echo "[ERROR] Failed to push tag"; exit 1; }
+
+      echo "[INFO] Tag pushed successfully to remote."
+
+      export NEW_BETA_NO_V NEW_BETA_TAG NEW_N ACTION
+
+.create_artifacts: &create_artifacts
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Generating version info for artifacts..."
+      echo "----------------------------------------"
+
+      # Artefactos**
+      cat > .app_version_env <<EOF
+      APP_VERSION=${NEW_BETA_NO_V}
+      BASE_VERSION=${BASE_VERSION_NO_V}
+      VERSION_WITH_V=${NEW_BETA_TAG}
+      EOF
+
+      TIMESTAMP="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+      cat > version.json <<EOF
+      {
+        "appVersion": "${NEW_BETA_NO_V}",
+        "baseVersion": "${BASE_VERSION_NO_V}",
+        "versionWithV": "${NEW_BETA_TAG}",
+        "pipelineId": ${CI_PIPELINE_ID},
+        "timestamp": "${TIMESTAMP}"
+      }
+      EOF
+
+      echo ""
+      echo "===== SUMMARY ====="
+      echo "1. Base version: ${BASE_VERSION_NO_V}"
+      echo "2. New tag: ${NEW_BETA_TAG}"
+      echo "3. Tag pushed: true"
+      echo "Remote check for ${NEW_BETA_TAG}:"
+      git ls-remote --tags origin | grep "${NEW_BETA_TAG}" || echo "(not pushed)"
+
+      echo ""
+      echo "[DEBUG] Contents of .app_version_env:"
+      cat .app_version_env
+
+.export_to_env: &export_to_env
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Exporting variables to .app_version_env"
+      echo "----------------------------------------"
+
+      {
+        echo "VERSION_NAME=${NEW_BETA_NO_V}"
+        echo "PIPELINE_ID=${CI_PIPELINE_ID}"
+      } >> .app_version_env
+
+      echo "[INFO] .app_version_env file updated"
+      echo "[DEBUG] Contents of .app_version_env:"
+      cat .app_version_env
+
+.latest_verification: &latest_verification
+  script:
+    - |
+      set -e
+      set -o pipefail
+      echo ""
+      echo "----------------------------------------"
+      echo "[INFO] Final verification..."
+      echo "----------------------------------------"
+
+      # Asegurar artifact mínimo aunque el script fallara antes
+      [ -f .app_version_env ] || {
+        echo "APP_VERSION=" > .app_version_env
+      }
+
+      # shellcheck disable=SC1091
+      . ./.app_version_env
+
+      echo "[INFO] Tags on current commit:"
+      git tag --points-at HEAD || echo "(no tags)"
+
+      if [ -n "${APP_VERSION:-}" ]; then
+        CHECK_TAG="v${APP_VERSION}"
+        echo "[INFO] Remote verification for ${CHECK_TAG}:"
+        if git ls-remote --tags origin | grep -q "refs/tags/${CHECK_TAG}$"; then
+          echo "[INFO] Tag ${CHECK_TAG} exists in remote."
+        else
+          echo "[ERROR] Tag ${CHECK_TAG} does NOT exist in remote."
+          echo "[HINT] Check token permissions or tag protection."
+        fi
+      else
+        echo "[ERROR] APP_VERSION is empty after sourcing .app_version_env."
+        echo "[HINT] Verifica que NEW_BETA_NO_V esté definido antes de .create_artifacts y que .calculate_beta_plus_one se ejecuta en el mismo job."
+      fi
+
+      echo "Artifact correlation:"
+      echo "APP_VERSION=${APP_VERSION:-<empty>}"
+
+# Simulate semantic-release in dry-run mode with git-tag fallback.
+# Used by BOM pipelines for MR-triggered version simulation (development and quality).
+# Expects the following CI variables as implicit arguments:
+#   SIMULATE_BRANCH — branch to pass to semantic-release --branches (e.g. CI_MERGE_REQUEST_SOURCE_BRANCH_NAME)
+.simulate_semantic_release_with_tag: &simulate_semantic_release_with_tag
+  script:
+    - !reference [.downloads_deploytestrc_dependency, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Simulate Semantic Release"
+
+      OUTPUT=$(semantic-release --dry-run --no-ci --branches "$SIMULATE_BRANCH" 2>&1) || true
+      echo "$OUTPUT"
+
+      VERSION=$(echo "$OUTPUT" | grep -o "he next release version is [0-9]*\.[0-9]*\.[0-9]*" | awk '{print $6}' || true)
+
+      if [[ -z "$VERSION" ]]; then
+        echo "[WARN] semantic-release did not determine a next version."
+        echo "[INFO] Falling back to latest Git tag on the source branch."
+        git fetch --tags --quiet
+        FALLBACK_TAG=$(git tag --merged "origin/${SIMULATE_BRANCH}" 2>/dev/null \
+          | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+          | sort -V \
+          | tail -n 1 || true)
+        if [[ -z "$FALLBACK_TAG" ]]; then
+          FALLBACK_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        fi
+        if [[ -n "$FALLBACK_TAG" ]]; then
+          VERSION="${FALLBACK_TAG#v}"
+          echo "[INFO] Using fallback version from tag ${FALLBACK_TAG}: ${VERSION}"
+        else
+          echo "[ERROR] No version could be determined from semantic-release or Git tags."
+          exit 1
+        fi
+      fi
+
+      echo "APP_VERSION=${VERSION}" >> .app_version_env
+      echo "VERSION_NAME=${VERSION}" >> .app_version_env
+    - echo "[INFO] Show .app_version_env"
+    - cat .app_version_env
+
+# Resolve version from the latest git tag.
+# Used by BOM pipelines for quality and production branches (where semantic-release is not run).
+# Expects the following CI variable as implicit argument:
+#   ENVIRONMENT — current environment name (quality, production), used in log messages
+.get_version_from_tag: &get_version_from_tag
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+      echo "[INFO] Fetching tags to determine version"
+      git fetch --tags --quiet
+      LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null \
+        | sort -V \
+        | tail -n 1 || true)
+      if [[ -z "$LATEST_TAG" ]]; then
+        LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+      fi
+      if [[ -n "$LATEST_TAG" ]]; then
+        VERSION="${LATEST_TAG#v}"
+        echo "[INFO] Version from tag ${LATEST_TAG}: ${VERSION}"
+        echo "APP_VERSION=${VERSION}" > .app_version_env
+        echo "VERSION_NAME=${VERSION}" >> .app_version_env
+      else
+        echo "[ERROR] No git tag found. Cannot determine version for ${ENVIRONMENT} pipeline."
+        exit 1
+      fi
+    - echo "[INFO] Show .app_version_env"
+    - cat .app_version_env

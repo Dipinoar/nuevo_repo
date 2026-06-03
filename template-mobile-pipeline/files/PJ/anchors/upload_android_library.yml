@@ -1,0 +1,19 @@
+.upload_android_library: &upload_android_library
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG $LIBRARY_PROJECT_FLAG' project?"
+            if [[ "$PIPELINE_PROJECT_OS" == "$ANDROID_PROJECT_FLAG" && "$PIPELINE_PROJECT_TYPE" == "$LIBRARY_PROJECT_FLAG" ]]; then
+                echo "[INFO!] Yes."
+                echo "[INFO!] Uploading packages as Maven Library."
+
+                SEARCH_DIR="${EFFECTIVE_RELEASE_DIR:-${RELEASE_DIRECTORY}}"
+                for file in $(find "${SEARCH_DIR}" -type f -name "*.pom"); do
+                    echo "[INFO!] Calling script to upload artifacts using info from $file"
+                    python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_pom.py" -p "$file" -u "${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_MAVEN_TYPE_SUFFIX}" -a "JOB-TOKEN" -t "${CI_JOB_TOKEN}"
+                done
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' process."
+            fi

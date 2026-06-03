@@ -1,0 +1,188 @@
+.set_java_version: &set_java_version
+    before_script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG' project?"
+            if [[ "${PIPELINE_PROJECT_OS:-}" == "${ANDROID_PROJECT_FLAG:-}" ]]; then
+                OS_NAME="$(uname -s || echo unknown)"
+                echo "[INFO] Runner OS: ${OS_NAME}"
+
+                DESIRED_JAVA="${PIPELINE_PROJECT_JAVA_VERSION:-}"
+                if [[ -z "${DESIRED_JAVA}" ]]; then
+                  echo "[ERROR] No Java version specified (PIPELINE_PROJECT_JAVA_VERSION is empty)."
+                  exit 1
+                fi
+                echo "[INFO] Selecting Java: ${DESIRED_JAVA}"
+
+                verify_java_major() {
+                  local expected_major="$1"
+                  local v
+                  v="$(java -version 2>&1 || true)"
+                  echo "[DEBUG] java -version output:"
+                  echo "${v}"
+                  if ! echo "${v}" | grep -qE "version \"${expected_major}(\.|$)"; then
+                    echo "[ERROR] Java ${expected_major} not active after selection."
+                    exit 1
+                  fi
+                }
+
+                use_java_home() {
+                  local jhome="$1"
+                  if [[ -d "${jhome}" ]]; then
+                    export JAVA_HOME="${jhome}"
+                    export PATH="${JAVA_HOME}/bin:${PATH}"
+                    echo "[INFO] JAVA_HOME set to: ${JAVA_HOME}"
+                  else
+                    echo "[ERROR] JAVA_HOME candidate does not exist: ${jhome}"
+                    exit 1
+                  fi
+                }
+
+                case "${DESIRED_JAVA}" in
+                  temurin-21)
+                    if [[ "${OS_NAME}" == "Darwin" ]]; then
+                      if /usr/libexec/java_home -v 21 >/dev/null 2>&1; then
+                        use_java_home "$(/usr/libexec/java_home -v 21)"
+                        verify_java_major "21"
+                      else
+                        echo "[ERROR] Java 21 not found on macOS via /usr/libexec/java_home. Ensure Temurin 21 is installed."
+                        exit 1
+                      fi
+                    else
+                      if command -v sdk >/dev/null 2>&1; then
+                        echo "[INFO] SDKMAN! detected. Selecting Temurin 21 (21.0.8-tem if available)."
+                        sdk use java 21.0.8-tem || { echo "[ERROR] SDKMAN! could not activate java 21.0.8-tem."; exit 1; }
+                        verify_java_major "21"
+                      else
+                        echo "[INFO] SDKMAN! not found. Trying common JDK 21 locations under /usr/lib/jvm."
+                        for candidate in \
+                          /usr/lib/jvm/temurin-21* \
+                          /usr/lib/jvm/java-21* \
+                          /usr/lib/jvm/jdk-21* \
+                          /usr/lib/jvm/adoptium-21* \
+                          /usr/lib/jvm/temurin-21-jdk* \
+                          /usr/lib/jvm/openjdk-21* \
+                        ; do
+                          if [[ -d "${candidate}" ]]; then
+                            use_java_home "${candidate}"
+                            verify_java_major "21"
+                            break
+                          fi
+                        done
+                        if [[ -z "${JAVA_HOME:-}" ]]; then
+                          echo "[ERROR] Java 21 not found on Linux. Ensure the runner image preinstalls Temurin/OpenJDK 21."
+                          exit 1
+                        fi
+                      fi
+                    fi
+                    ;;
+
+                  java-21|21)
+                    if [[ "${OS_NAME}" == "Darwin" ]]; then
+                      if /usr/libexec/java_home -v 21 >/dev/null 2>&1; then
+                        use_java_home "$(/usr/libexec/java_home -v 21)"
+                        verify_java_major "21"
+                      else
+                        echo "[ERROR] Java 21 not found on macOS."
+                        exit 1
+                      fi
+                    else
+                      if command -v sdk >/dev/null 2>&1; then
+                        sdk use java 21.0.8-tem || { echo "[ERROR] SDKMAN! could not activate java 21.0.8-tem."; exit 1; }
+                        verify_java_major "21"
+                      else
+                        for candidate in /usr/lib/jvm/java-21* /usr/lib/jvm/jdk-21* /usr/lib/jvm/openjdk-21*; do
+                          [[ -d "${candidate}" ]] && use_java_home "${candidate}" && verify_java_major "21" && break
+                        done
+                        [[ -z "${JAVA_HOME:-}" ]] && { echo "[ERROR] Java 21 not found on Linux."; exit 1; }
+                      fi
+                    fi
+                    ;;
+
+                  java-17|17)
+                    if [[ "${OS_NAME}" == "Darwin" ]]; then
+                      if /usr/libexec/java_home -v 17 >/dev/null 2>&1; then
+                        use_java_home "$(/usr/libexec/java_home -v 17)"
+                        verify_java_major "17"
+                      else
+                        echo "[ERROR] Java 17 not found on macOS."
+                        exit 1
+                      fi
+                    else
+                      if command -v sdk >/dev/null 2>&1; then
+                        sdk use java 17.0.* || { echo "[ERROR] SDKMAN! could not activate a Java 17 distribution."; exit 1; }
+                        verify_java_major "17"
+                      else
+                        for candidate in /usr/lib/jvm/java-17* /usr/lib/jvm/jdk-17* /usr/lib/jvm/openjdk-17*; do
+                          [[ -d "${candidate}" ]] && use_java_home "${candidate}" && verify_java_major "17" && break
+                        done
+                        [[ -z "${JAVA_HOME:-}" ]] && { echo "[ERROR] Java 17 not found on Linux."; exit 1; }
+                      fi
+                    fi
+                    ;;
+
+                  java-11|11)
+                    if [[ "${OS_NAME}" == "Darwin" ]]; then
+                      if /usr/libexec/java_home -v 11 >/dev/null 2>&1; then
+                        use_java_home "$(/usr/libexec/java_home -v 11)"
+                        verify_java_major "11"
+                      else
+                        echo "[ERROR] Java 11 not found on macOS."
+                        exit 1
+                      fi
+                    else
+                      if command -v sdk >/dev/null 2>&1; then
+                        sdk use java 11.0.* || { echo "[ERROR] SDKMAN! could not activate a Java 11 distribution."; exit 1; }
+                        verify_java_major "11"
+                      else
+                        for candidate in /usr/lib/jvm/java-11* /usr/lib/jvm/jdk-11* /usr/lib/jvm/openjdk-11*; do
+                          [[ -d "${candidate}" ]] && use_java_home "${candidate}" && verify_java_major "11" && break
+                        done
+                        [[ -z "${JAVA_HOME:-}" ]] && { echo "[ERROR] Java 11 not found on Linux."; exit 1; }
+                      fi
+                    fi
+                    ;;
+
+                  java-8|8)
+                    if [[ "${OS_NAME}" == "Darwin" ]]; then
+                      if /usr/libexec/java_home -v 1.8 >/dev/null 2>&1; then
+                        use_java_home "$(/usr/libexec/java_home -v 1.8)"
+                        verify_java_major "1.8"
+                      else
+                        echo "[ERROR] Java 8 not found on macOS."
+                        exit 1
+                      fi
+                    else
+                      if command -v sdk >/dev/null 2>&1; then
+                        sdk use java 8.0.* || { echo "[ERROR] SDKMAN! could not activate a Java 8 distribution."; exit 1; }
+                        java -version
+                        if ! java -version 2>&1 | grep -q '\"1\.8'; then
+                          echo "[ERROR] Java 8 not active after selection."
+                          exit 1
+                        fi
+                      else
+                        for candidate in /usr/lib/jvm/java-8* /usr/lib/jvm/jdk-8* /usr/lib/jvm/openjdk-8*; do
+                          [[ -d "${candidate}" ]] && use_java_home "${candidate}" && break
+                        done
+                        if ! java -version 2>&1 | grep -q '\"1\.8'; then
+                          echo "[ERROR] Java 8 not found/active on Linux."
+                          exit 1
+                        fi
+                      fi
+                    fi
+                    ;;
+
+                  *)
+                    echo "[ERROR] Unknown Java version label: ${DESIRED_JAVA}"
+                    echo "[INFO] Supported labels: temurin-21, java-21, java-17, java-11, java-8"
+                    exit 1
+                    ;;
+                esac
+
+                echo "[INFO] Active Java:"
+                java -version
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG' process."
+            fi

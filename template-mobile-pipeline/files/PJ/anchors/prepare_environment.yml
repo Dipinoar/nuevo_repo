@@ -1,0 +1,344 @@
+# Preparación del entorno PJ: instala python, lee config.yaml, genera build.env
+.prepare_pj_environment: &prepare_pj_environment
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      cd "${CURRENT_DIR}"
+      # Generate per-env files for each environment so build jobs can source
+      # the right one regardless of the workflow-selected ENVIRONMENT_SUFFIX
+      # (used by 4.2 Build QA on a feature → development MR).
+      for env_name in development quality production; do
+        rm -f build.env
+        python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/yaml_to_env.py" -f "ci/config.yaml" -e "${env_name}"
+        if [[ -f build.env ]]; then
+          mv build.env "build.${env_name}.env"
+        fi
+      done
+      # Restore the workflow-selected env into build.env for the dotenv report.
+      # Single-env keeps the dotenv well under GitLab's 150-variable cap.
+      python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/yaml_to_env.py" -f "ci/config.yaml" -e "${ENVIRONMENT}"
+      echo "[INFO] Generated env files:"
+      ls -lh build.env build.development.env build.quality.env build.production.env 2>/dev/null || true
+
+# Recuperar artefactos de dependencias
+.retrieve_pj_artifacts: &retrieve_pj_artifacts
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      cd "${CURRENT_DIR}"
+      python3 $PIPELINE_LOCAL_SCRIPTS_FOLDER/retrieve_artifacts.py -d $CURRENT_DIR
+
+# Recuperar secretos desde AWS
+.retrieve_pj_secrets: &retrieve_pj_secrets
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      cd "${CURRENT_DIR}"
+
+      # Helper: switch ENVIRONMENT_SUFFIX, scrub the previous env's secret-related
+      # vars (so read_secrets.py only iterates entries for the requested env),
+      # source the matching per-env config, then run read_secrets.py.
+      retrieve_for_suffix() {
+        local target_suffix="$1"
+        if [[ -n "${target_suffix}" ]]; then
+          local prev_env_upper=$(echo "${ENVIRONMENT_SUFFIX#_}" | tr '[:lower:]' '[:upper:]')
+
+          echo "[INFO] Switching ENVIRONMENT_SUFFIX from '${ENVIRONMENT_SUFFIX:-}' to '${target_suffix}'"
+          ENVIRONMENT_SUFFIX="${target_suffix}"
+          ENVIRONMENT=$(echo "${target_suffix#_}" | tr '[:upper:]' '[:lower:]')
+          export ENVIRONMENT_SUFFIX ENVIRONMENT
+
+          if [[ -n "${prev_env_upper}" ]]; then
+            for var in $(compgen -v | grep "_${prev_env_upper}_TYPE$" || true); do
+              local base="${var%_TYPE}"
+              unset "${base}_TYPE" "${base}_NAME" "${base}_VALUE" "${base}_KEY" "${base}_TARGET" "${base}_BASE64"
+            done
+          fi
+
+          local env_file="build.${ENVIRONMENT}.env"
+          if [[ -f "${env_file}" ]]; then
+            echo "[INFO] Sourcing per-env config from ${env_file}"
+            set -a
+            # shellcheck disable=SC1090
+            source "${env_file}"
+            set +a
+          else
+            echo "[WARN] ${env_file} not found; secret lookups for ${ENVIRONMENT_SUFFIX} may fail."
+          fi
+        fi
+
+        echo "[INFO] Reading secrets for ENVIRONMENT_SUFFIX=${ENVIRONMENT_SUFFIX}"
+        export AWS_SECRET_ROLE_ARN="${!AWS_SECRET_ROLE}"
+        python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/read_secrets.py"
+      }
+
+      # Workflow-selected env first (uses ENVIRONMENT_SUFFIX as set by the
+      # workflow rules; produces secrets.env via dotenv artifact).
+      retrieve_for_suffix ""
+
+      # Additional envs declared by ADDITIONAL_RETRIEVE_ENV_SUFFIXES
+      # (space-separated, e.g. "_QUALITY"). Each pass stages its binary keystores
+      # to disk and appends env-prefixed string secrets to secrets.env.
+      if [[ -n "${ADDITIONAL_RETRIEVE_ENV_SUFFIXES:-}" ]]; then
+        for additional in ${ADDITIONAL_RETRIEVE_ENV_SUFFIXES}; do
+          echo "[INFO] === Retrieving additional env: ${additional} ==="
+          retrieve_for_suffix "${additional}"
+        done
+      fi
+
+# Version Promotion Summary: posts version and pipeline info as MR comment.
+# Runs early (after calculate_version) so the MR shows the promoted version
+# before the build/deploy stages complete.
+.version_promotion_summary: &version_promotion_summary
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+      cd "${CURRENT_DIR}"
+
+      # Use the semantic version from 3.2 (SEMANTIC_VERSION) or 3.4 (APP_VERSION).
+      PROMOTED_VERSION="${SEMANTIC_VERSION:-${APP_VERSION:-NOVERSION}}"
+      echo "[INFO] Promoted version for summary: ${PROMOTED_VERSION}"
+
+      # Skip the comment when there is no MR (e.g. direct commit pipelines).
+      if [[ -z "${CI_MERGE_REQUEST_IID:-}" ]]; then
+        echo "[INFO] Not a merge request pipeline. Skipping MR comment."
+        exit 0
+      fi
+
+      TEMPLATE_FILE="${PIPELINE_LOCAL_SCRIPTS_FOLDER}/version_summary.md"
+      printf '%s\n' \
+        '# :arrow_down_small: Merge Request Summary' \
+        '' \
+        '## Next Promoted Version (TAG) for this Merge Request:' \
+        '' \
+        '### `:version:`' \
+        '' \
+        '## Last Pipeline:' \
+        '' \
+        '### [#:pipeline-id:](:pipeline-url:)' \
+        > "${TEMPLATE_FILE}"
+
+      python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_add_comment.py" \
+        -u  "${CI_SERVER_URL}" \
+        -t  "${TOKEN_GITLAB}" \
+        -p  "${CI_PROJECT_ID}" \
+        -mr "${CI_MERGE_REQUEST_IID}" \
+        -mf "${TEMPLATE_FILE}" \
+        -ml "version:${PROMOTED_VERSION}" \
+            "pipeline-id:${CI_PIPELINE_ID}" \
+            "pipeline-url:${CI_PIPELINE_URL}"
+
+# Comment Summary: postea resumen de artefactos en MR.
+# Lista los artefactos publicados en el Package Registry para los suffixes
+# correspondientes al MR actual (DEV/QA/PROD).
+.comment_pj_summary: &comment_pj_summary
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+      cd "${CURRENT_DIR}"
+
+      # ====== Resolve version published to the registry ======
+      # Modules (library) publish under APP_VERSION (beta, e.g. 1.6.1b5).
+      # Apps (application) publish under BASE_VERSION (semantic, e.g. 1.1.7).
+      if echo "${APP_VERSION:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$' && [[ "${PIPELINE_PROJECT_TYPE:-}" == "library" ]]; then
+        BASE_TAG="${APP_VERSION}"
+        echo "[INFO] Beta library detected — using APP_VERSION for registry lookup: ${BASE_TAG}"
+      else
+        BASE_TAG="${BASE_VERSION:-${APP_VERSION:-NOVERSION}}"
+        echo "[INFO] BASE_TAG for registry lookup: ${BASE_TAG}"
+      fi
+      echo "[INFO] APP_VERSION (tag/promoted): ${APP_VERSION:-NOVERSION}"
+
+      # ====== Search for artifacts published by THIS pipeline ======
+      # Query the Package Registry for all packages that match APP_VERSION,
+      # then filter files to only those containing APP_VERSION in their name.
+      # This dynamically shows whatever was published, regardless of suffix.
+      AUTH_HEADER="PRIVATE-TOKEN: ${TOKEN_GITLAB}"
+      PACKAGES_API="${CI_API_V4_URL}/projects/${PACKAGE_REGISTRY_ID}/packages"
+
+      echo "[INFO] Searching for packages matching APP_VERSION: ${APP_VERSION:-<not set>}"
+
+      if [[ "${PIPELINE_PROJECT_TYPE:-}" == "library" ]]; then
+        PACKAGES_JSON="$(curl -sS -H "${AUTH_HEADER}" \
+          "${PACKAGES_API}?package_type=maven&per_page=100")" || PACKAGES_JSON="[]"
+      else
+        PACKAGES_JSON="$(curl -sS -H "${AUTH_HEADER}" \
+          "${PACKAGES_API}?package_name=${CI_PROJECT_NAME}&per_page=100")" || PACKAGES_JSON="[]"
+      fi
+
+      # ====== List package files for each (name, version) ======
+      AUTH_HEADER="PRIVATE-TOKEN: ${TOKEN_GITLAB}"
+      PACKAGES_API="${CI_API_V4_URL}/projects/${PACKAGE_REGISTRY_ID}/packages"
+
+      # Python helper: extract package IDs and versions from the packages list API.
+      # Uses SEARCH_VERSION to filter packages whose version contains that string.
+      printf '%s\n' \
+        'import json, sys, os' \
+        'search_ver = os.environ.get("SEARCH_VERSION", "")' \
+        'try:' \
+        '    data = json.load(sys.stdin)' \
+        'except Exception:' \
+        '    sys.exit(0)' \
+        'if isinstance(data, list):' \
+        '    for pkg in data:' \
+        '        ver = pkg.get("version", "")' \
+        '        pid = pkg.get("id")' \
+        '        if pid and search_ver and search_ver in ver:' \
+        '            print(f"{pid}|{ver}")' \
+        > /tmp/extract_matching_pkgs.py
+
+      # Python helper: extract file names from the package_files API response.
+      printf '%s\n' \
+        'import json, sys' \
+        'try:' \
+        '    data = json.load(sys.stdin)' \
+        'except Exception:' \
+        '    sys.exit(0)' \
+        'if isinstance(data, list):' \
+        '    for f in data:' \
+        '        name = f.get("file_name")' \
+        '        if name:' \
+        '            print(name)' \
+        > /tmp/extract_file_names.py
+
+      # Build the direct download URL depending on package type.
+      build_download_url() {
+        local pkg_version="$1"
+        local file_name="$2"
+        if [[ "${PIPELINE_PROJECT_TYPE:-}" == "library" ]]; then
+          local aid="${file_name%%-${pkg_version}*}"
+          if [[ -z "$aid" || "$aid" == "$file_name" ]]; then
+            echo "${file_name}"
+            return
+          fi
+          local maven_url="${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_MAVEN_TYPE_SUFFIX}"
+          local gid_path
+          gid_path="$(echo "${PACKAGES_MAVEN_GROUP_ID:-cl.itau}" | tr '.' '/')"
+          echo "${maven_url}/${gid_path}/${aid}/${pkg_version}/${file_name}"
+        else
+          echo "${CI_API_V4_URL}/projects/${PACKAGE_REGISTRY_ID}/packages/generic/${CI_PROJECT_NAME}/${pkg_version}/${file_name}"
+        fi
+      }
+
+      # Determine which version string to search for in the registry.
+      # Library: search with APP_VERSION (beta, e.g. 1.6.1b11)
+      # App: search with BASE_VERSION (semantic, e.g. 1.1.7) because app publishes under BASE_VERSION
+      if [[ "${PIPELINE_PROJECT_TYPE:-}" == "library" ]]; then
+        SEARCH_VERSION="${APP_VERSION:-}"
+      else
+        SEARCH_VERSION="${BASE_VERSION:-${APP_VERSION:-}}"
+      fi
+      echo "[INFO] Searching for packages matching SEARCH_VERSION: ${SEARCH_VERSION}"
+
+      # Find all package versions matching and list their files
+      MATCHING_PKGS="$(printf '%s' "${PACKAGES_JSON}" | SEARCH_VERSION="${SEARCH_VERSION}" python3 /tmp/extract_matching_pkgs.py || true)"
+
+      # Collect all files grouped by version (multiple packages can share a version)
+      ARTIFACTS_MD=""
+      declare -A VERSION_FILES=()
+
+      while IFS='|' read -r pkg_id pkg_version; do
+        [[ -z "$pkg_id" || -z "$pkg_version" ]] && continue
+
+        echo "[INFO] Fetching files for package ${pkg_id} (version: ${pkg_version})"
+        PKG_FILES="$(curl -sS -H "${AUTH_HEADER}" \
+          "${PACKAGES_API}/${pkg_id}/package_files?per_page=200" \
+          | python3 /tmp/extract_file_names.py | sort -u || true)"
+
+        # Filter to only files from THIS pipeline
+        if [[ -n "${APP_VERSION:-}" && -n "${PKG_FILES}" ]]; then
+          PKG_FILES="$(printf '%s\n' "${PKG_FILES}" | grep -F -- "${APP_VERSION}" || true)"
+        fi
+
+        [[ -z "${PKG_FILES}" ]] && continue
+
+        # Append files to the version group
+        if [[ -n "${VERSION_FILES[$pkg_version]:-}" ]]; then
+          VERSION_FILES["$pkg_version"]+=$'\n'"${PKG_FILES}"
+        else
+          VERSION_FILES["$pkg_version"]="${PKG_FILES}"
+        fi
+      done <<< "${MATCHING_PKGS}"
+
+      # Build markdown from grouped results
+      for pkg_version in $(printf '%s\n' "${!VERSION_FILES[@]}" | sort); do
+        ARTIFACTS_MD+="\n### ${pkg_version}\n"
+        while IFS= read -r file_name; do
+          [[ -z "${file_name}" ]] && continue
+          DOWNLOAD_URL="$(build_download_url "${pkg_version}" "${file_name}")"
+          ARTIFACTS_MD+="- ${DOWNLOAD_URL}\n"
+        done <<< "${VERSION_FILES[$pkg_version]}"
+      done
+
+      [[ -z "${ARTIFACTS_MD}" ]] && ARTIFACTS_MD="\n_No artifacts found in Package Registry_\n"
+
+      echo "[INFO] Artifacts Markdown preview:"
+      printf '%b\n' "${ARTIFACTS_MD}"
+
+      # Skip the comment when there is no MR (e.g. direct commit pipelines).
+      if [[ -z "${CI_MERGE_REQUEST_IID:-}" ]]; then
+        echo "[INFO] Not a merge request pipeline. Skipping MR comment."
+        exit 0
+      fi
+
+      # Use the shared mr_artifacts.md template (same as superapp)
+      VERSION_TAG="v${APP_VERSION:-${BASE_VERSION:-NOVERSION}}"
+      TAG_URL="${CI_PROJECT_URL}/-/tags/${VERSION_TAG}"
+
+      # Download template if not already present
+      if [[ ! -f "mr_artifacts.md" ]]; then
+        curl -fL -o mr_artifacts.md --location --request GET \
+          "${PIPELINE_API_REPO_URL}/templates%2Fmr_artifacts.md/raw?ref=${PIPELINE_BRANCH}" \
+          --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download mr_artifacts.md"
+      fi
+      TEMPLATE_FILE="$(pwd -P)/mr_artifacts.md"
+
+      python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_add_comment.py" \
+        -u  "${CI_SERVER_URL}" \
+        -t  "${TOKEN_GITLAB}" \
+        -p  "${CI_PROJECT_ID}" \
+        -mr "${CI_MERGE_REQUEST_IID}" \
+        -mf "${TEMPLATE_FILE}" \
+        -ml "pipeline-id:${CI_PIPELINE_ID}" \
+            "pipeline-url:${CI_PIPELINE_URL}" \
+            "version:${VERSION_TAG}" \
+            "tag-url:${TAG_URL}" \
+            "artifacts-list:$(printf '%b' "${ARTIFACTS_MD}")"
+
+# Publish to Package Registry
+.publish_pj_to_registry: &publish_pj_to_registry
+  script:
+    - CURRENT_DIR=$(pwd)
+    - !reference [.prepare_recover_package_scripts, script]
+    - !reference [.install_pipeline_python_deps, script]
+    - |
+      cd "${CURRENT_DIR}"
+      # Compute the per-env release subdir so upload_* anchors search the right
+      # path (matches the path 5.x Build jobs write to via run_pj_build).
+      EFFECTIVE_RELEASE_DIR="${RELEASE_DIRECTORY}${RELEASE_SUBDIR:+/${RELEASE_SUBDIR}}"
+      export EFFECTIVE_RELEASE_DIR
+      echo "[INFO] EFFECTIVE_RELEASE_DIR=${EFFECTIVE_RELEASE_DIR}"
+      if [[ -d "${EFFECTIVE_RELEASE_DIR}" ]]; then
+        echo "[INFO] ${EFFECTIVE_RELEASE_DIR}/ contents:"
+        find "${EFFECTIVE_RELEASE_DIR}" -type f | sort
+      else
+        echo "[WARN] ${EFFECTIVE_RELEASE_DIR}/ does not exist."
+      fi
+      GROUP_ID=$(python3 ${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_get_group_id.py -u $CI_SERVER_URL -t $TOKEN_GITLAB -p $CI_PROJECT_ID)
+    - !reference [.upload_android_library, script]
+    - !reference [.upload_application, script]
+

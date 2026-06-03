@@ -1,0 +1,46 @@
+.upload_application: &upload_application
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this an '$APPLICATION_PROJECT_FLAG' project?"
+            if [[ "$PIPELINE_PROJECT_TYPE" == "$APPLICATION_PROJECT_FLAG" ]]; then
+                echo "[INFO!] Yes."
+                echo "[INFO!] Uploading packages as Generic Library."
+
+                # Search the per-env subdir when the caller (publish_pj_to_registry / build job)
+                # has set EFFECTIVE_RELEASE_DIR; otherwise fall back to the root release directory.
+                SEARCH_DIR="${EFFECTIVE_RELEASE_DIR:-${RELEASE_DIRECTORY}}"
+                if [[ ! -d "${SEARCH_DIR}" ]]; then
+                    echo "[ERROR] Search directory ${SEARCH_DIR} does not exist. Upstream build artifacts missing."
+                    exit 1
+                fi
+
+                files_found=$(find "${SEARCH_DIR}" -type f -name "*.${!PIPELINE_PROJECT_PUBLISH_OUTPUT}" || true)
+                if [[ -z "$files_found" ]]; then
+                    # Fallback: search for any apk or aab files
+                    echo "[INFO] No files matching *.${!PIPELINE_PROJECT_PUBLISH_OUTPUT}, trying apk and aab..."
+                    files_found=$(find "${SEARCH_DIR}" -type f \( -name "*.apk" -o -name "*.aab" \) || true)
+                fi
+                if [[ -z "$files_found" ]]; then
+                    echo "[ERROR] No uploadable files (apk/aab) found under ${SEARCH_DIR}"
+                    echo "[INFO] ${SEARCH_DIR}/ contents:"
+                    find "${SEARCH_DIR}" -type f | sort || true
+                    exit 1
+                fi
+
+                for file in $files_found; do
+                    echo "[INFO!] Calling script to upload artifacts using info from $file"
+                    VERSION="${APP_VERSION}${PACKAGES_MAVEN_URL_SUFFIX}"
+                    python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_generic.py" \
+                        -p "$file" \
+                        -u "${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_GENERIC_TYPE_SUFFIX}" \
+                        -v "${VERSION}" \
+                        -n "${CI_PROJECT_NAME}" \
+                        -a "JOB-TOKEN" \
+                        -t "${CI_JOB_TOKEN}"
+                done
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG $LIBRARY_PROJECT_FLAG' process."
+            fi

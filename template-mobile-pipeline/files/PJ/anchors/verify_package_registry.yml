@@ -1,0 +1,24 @@
+# Verifica que los artefactos de library existen en Package Registry
+.verify_package_registry: &verify_package_registry
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      echo "[INFO] Verifying library artifacts in Package Registry for ${ENVIRONMENT} environment"
+      echo "[INFO] Project: ${CI_PROJECT_NAME}"
+
+      SUFFIX="${PACKAGES_MAVEN_NAME_SUFFIX}"
+      if [[ -n "$SUFFIX" && "${APP_VERSION}" == *"${SUFFIX}" ]]; then
+        PKG_VERSION="${APP_VERSION}"
+      else
+        PKG_VERSION="${APP_VERSION}${SUFFIX}"
+      fi
+      echo "[INFO] Checking version: ${PKG_VERSION}"
+
+      curl -fL -o verify_package_registry.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fverify_package_registry.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download verify_package_registry.py"
+
+      python3 verify_package_registry.py \
+        -u "${PACKAGES_PROJECT_URL_PREFIX}" \
+        -t "${TOKEN_GITLAB}" \
+        -v "${PKG_VERSION}"

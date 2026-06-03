@@ -1,0 +1,44 @@
+variables:
+  LANG: "en_US.UTF-8"
+  GIT_DEPTH: "0"
+
+  ANDROID_PROJECT_FLAG: "android"
+  APPLICATION_PROJECT_FLAG: "application"
+  LIBRARY_PROJECT_FLAG: "library"
+
+  PIPELINE_REPO_ID: 9393
+  PIPELINE_BRANCH: "main"
+  PIPELINE_LOCAL_SCRIPTS_FOLDER: "pipeline-scripts"
+  PIPELINE_API_REPO_URL: "http://gitlab.itauchile.cl/api/v4/projects/${PIPELINE_REPO_ID}/repository/files"
+  PACKAGES_GROUP_URL_PREFIX: "http://gitlab.itauchile.cl/api/v4/groups/"
+  PACKAGES_PROJECT_URL_PREFIX: "http://gitlab.itauchile.cl/api/v4/projects/${CI_PROJECT_ID}"
+  PACKAGES_GENERIC_TYPE_SUFFIX: "packages/generic"
+  PACKAGES_MAVEN_TYPE_SUFFIX: "packages/maven"
+  MAVEN_LIBRARY_DIR: "ci/maven"
+  RELEASE_DIRECTORY: "pipeline-output"
+  PACKAGE_REGISTRY_ID: "${CI_PROJECT_ID}"
+  NAVIGATION: "false"
+
+  RUNNER_ANDROID_IMAGE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:image-v3"
+  RUNNER_DEFAULT_IMAGE_SECURE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-default-image:2.5.2-secure"
+  RUNNER_ANDROID_SECURE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-android:1.0.0-secure"
+  RUNNER_NODE_SECURE: "gitlab.itauchile.cl:5050/gitlab-registry-central/docker-images/runner-devops/runner-node:24.11.0-secure"
+  QA_PREFIX: "-quality"
+  DEV_PREFIX: "-development"
+
+  PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+
+  TEMURIN_VERSION: "21"
+  GRADLE_VERSION: "8.8"
+  ANDROID_HOME: "/opt/android-sdk"
+  ANDROID_SDK_ROOT: "/opt/android-sdk"
+
+
+  AWS_SECRET_ROLE_DEVELOPMENT: "arn:aws:iam::456829521996:role/itau-sts-terraform"
+  AWS_SECRET_ROLE_QUALITY: "arn:aws:iam::456829521996:role/itau-sts-terraform"
+  AWS_SECRET_ROLE_PRODUCTION: "arn:aws:iam::133171776067:role/itau-sts-terraform"
+
+  SSH_GUARDSQUARE_KEY: "/root/.ssh/guardsquare_rsa"
+  SSH_GUARDSQUARE_PASS: "Dexguard.2025"
+
+  veracodeoff: "false"

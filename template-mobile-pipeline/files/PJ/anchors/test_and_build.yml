@@ -1,0 +1,151 @@
+# Ejecución de test desde ci/config.yaml
+.run_pj_test: &run_pj_test
+  script:
+    - |
+      echo "This project is marked as '$PIPELINE_PROJECT_OS $PIPELINE_PROJECT_TYPE'"
+      echo "Executing command '${!PIPELINE_PROJECT_TEST}'"
+      bash -c "$(echo ${!PIPELINE_PROJECT_TEST} | xargs)" && echo "execute:SUCCESS" || { echo "execute:FAILURE"; exit 1; }
+
+# Ejecución de build desde ci/config.yaml + scan + copia a veracode
+.run_pj_build: &run_pj_build
+  script:
+    - |
+      if [[ -f ".sequential_publish_done" ]]; then
+        echo "[INFO] Sequential publish already completed. Skipping standard build."
+        exit 0
+      fi
+    - |
+      # Per-env subdir under RELEASE_DIRECTORY (set by jobs that build non-default envs).
+      EFFECTIVE_RELEASE_DIR="${RELEASE_DIRECTORY}${RELEASE_SUBDIR:+/${RELEASE_SUBDIR}}"
+      VERACODE_TARGET_DIR="dwtoveracode${RELEASE_SUBDIR:+/${RELEASE_SUBDIR}}"
+      export EFFECTIVE_RELEASE_DIR VERACODE_TARGET_DIR
+      if [ -d "${EFFECTIVE_RELEASE_DIR}" ]; then
+        rm -rf "${EFFECTIVE_RELEASE_DIR}" && mkdir -p "${EFFECTIVE_RELEASE_DIR}" && git restore "${EFFECTIVE_RELEASE_DIR}" 2>/dev/null || true
+      else
+        mkdir -p "${EFFECTIVE_RELEASE_DIR}"
+      fi
+    - |
+      echo "This project is marked as '$PIPELINE_PROJECT_OS $PIPELINE_PROJECT_TYPE'"
+      RESOLVED_BUILD_CMD="${!PIPELINE_PROJECT_BUILD:-}"
+      if [[ -z "${RESOLVED_BUILD_CMD// }" ]]; then
+        echo "[ERROR] No value found for ${PIPELINE_PROJECT_BUILD} (ENVIRONMENT_SUFFIX='${ENVIRONMENT_SUFFIX}')."
+        echo "[ERROR] Check that 2.4 Prepare Environment emitted keys for this env, and that ci/config.yaml defines a build command for it."
+        exit 1
+      fi
+      echo "Executing build command ${RESOLVED_BUILD_CMD}"
+      bash -c "$(echo ${RESOLVED_BUILD_CMD} | xargs)" && echo "execute:SUCCESS" || { echo "execute:FAILURE"; exit 1; }
+    - |
+      if [[ "${PIPELINE_PROJECT_TYPE}" == "library" ]]; then
+        echo "[INFO] Library detected — preparing scan artifacts"
+      fi
+    - !reference [.scan_android_library, script]
+    - |
+      # Upload single-module library to Package Registry during pre-merge
+      if [[ "$PIPELINE_PROJECT_TYPE" == "library" && ! -f ".sequential_publish_done" && -d "${EFFECTIVE_RELEASE_DIR}" && "$(ls -A ${EFFECTIVE_RELEASE_DIR} 2>/dev/null)" ]]; then
+        echo "[INFO] Single-module library detected — uploading to Package Registry"
+
+        # Download upload script if not already present
+        if [[ ! -f "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_pom.py" ]]; then
+          curl -fL -o "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_pom.py" \
+            "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fgitlab_upload_pom.py/raw?ref=${PIPELINE_BRANCH}" \
+            --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download gitlab_upload_pom.py"
+        fi
+
+        MAVEN_URL="${PACKAGES_PROJECT_URL_PREFIX}/${PACKAGES_MAVEN_TYPE_SUFFIX}"
+
+        for file in $(find "${EFFECTIVE_RELEASE_DIR}" -type f -name "*.pom"); do
+          echo "[INFO] Uploading artifacts using info from $file"
+          python3 "${PIPELINE_LOCAL_SCRIPTS_FOLDER}/gitlab_upload_pom.py" \
+            -p "$file" \
+            -u "${MAVEN_URL}" \
+            -a "JOB-TOKEN" -t "${CI_JOB_TOKEN}" \
+            && echo "[INFO] ✅ POM + AAR upload succeeded for $file" \
+            || echo "[ERROR] ❌ POM upload failed for $file"
+
+          # Upload Gradle Module Metadata (.module) via curl
+          MODULE_FILE=$(find . -path "*/build/publications/*/module.json" -print -quit 2>/dev/null || true)
+          if [[ -f "$MODULE_FILE" ]]; then
+            GID=$(python3 -c "import sys,xml.etree.ElementTree as ET;r=ET.parse(sys.argv[1]).getroot();print(next((c.text for c in r if c.tag.endswith('groupId')),'-'))" "$file" 2>/dev/null)
+            AID=$(python3 -c "import sys,xml.etree.ElementTree as ET;r=ET.parse(sys.argv[1]).getroot();print(next((c.text for c in r if c.tag.endswith('artifactId')),'-'))" "$file" 2>/dev/null)
+            VER=$(python3 -c "import sys,xml.etree.ElementTree as ET;r=ET.parse(sys.argv[1]).getroot();print(next((c.text for c in r if c.tag.endswith('version')),'-'))" "$file" 2>/dev/null)
+            GPATH=$(echo "$GID" | tr '.' '/')
+            MODULE_UPLOAD_URL="${MAVEN_URL}/${GPATH}/${AID}/${VER}/${AID}-${VER}.module"
+            curl -sS --header "JOB-TOKEN: ${CI_JOB_TOKEN}" \
+              --upload-file "$MODULE_FILE" \
+              "${MODULE_UPLOAD_URL}" \
+              && echo "[INFO] ✅ Gradle module metadata uploaded to ${MODULE_UPLOAD_URL}" \
+              || echo "[WARN] ⚠️ Gradle module metadata upload failed"
+          else
+            echo "[WARN] No Gradle Module Metadata (module.json) found in build/publications/"
+          fi
+        done
+      fi
+    - !reference [.scan_android_application_unpinned, script]
+    - |
+      echo "[INFO] Moving ${EFFECTIVE_RELEASE_DIR} to ${VERACODE_TARGET_DIR}/"
+      mkdir -p "${VERACODE_TARGET_DIR}"
+      if [ -d "${EFFECTIVE_RELEASE_DIR}" ] && [ "$(ls -A ${EFFECTIVE_RELEASE_DIR} 2>/dev/null)" ]; then
+        cp -r "${EFFECTIVE_RELEASE_DIR}/"* "${VERACODE_TARGET_DIR}/"
+      fi
+      echo "[INFO] ${EFFECTIVE_RELEASE_DIR}/ final contents:"
+      find "${EFFECTIVE_RELEASE_DIR}/" -type f 2>/dev/null | sort || echo "[WARN] ${EFFECTIVE_RELEASE_DIR}/ is empty"
+      echo "[INFO] ${VERACODE_TARGET_DIR}/ final contents:"
+      find "${VERACODE_TARGET_DIR}/" -type f 2>/dev/null | sort || echo "[WARN] ${VERACODE_TARGET_DIR}/ is empty"
+
+# Preparación de metadata para Veracode
+.prepare_pj_veracode: &prepare_pj_veracode
+  script:
+    - |
+      if [[ "${PIPELINE_PROJECT_TYPE}" == "library" ]]; then
+        echo "[INFO] Skipping Veracode for library projects"
+        echo "VERACODE_APP_TYPE=${PIPELINE_PROJECT_TYPE}" >> "build.env"
+        exit 0
+      fi
+
+      echo "[INFO] Preparing Veracode metadata from Build artifacts"
+      PROJECT_OS=$(echo $PIPELINE_PROJECT_OS | awk '{print toupper(substr($0,0,1))tolower(substr($0,2))}')
+      PROJECT_VERSION="${APP_VERSION:-1.0.0}"
+      echo "CI_ARTIFACT_JOB_ID=${CI_JOB_ID}" >> build.env
+      echo "CI_ARTIFACT_PROJECT_SOURCE=${PIPELINE_PROJECT_OS}" >> build.env
+      echo "CI_ARTIFACT_VERSION=${PROJECT_VERSION}" >> "build.env"
+      echo "VERACODE_ARTIFACT=$CI_PROJECT_NAME" >> "build.env"
+      echo "VERACODE_APPNAME_FLAG=${PROJECT_OS}" >> "build.env"
+      echo "VERACODE_APPNAME=${CI_PROJECT_PATH}" >> "build.env"
+      echo "VERACODE_APP_TYPE=${PIPELINE_PROJECT_TYPE}" >> "build.env"
+
+      echo "[INFO] dwtoveracode/ contents (from Build):"
+      find dwtoveracode/ -type f 2>/dev/null | sort || echo "[WARN] dwtoveracode/ is empty"
+
+      echo "[INFO] Veracode metadata:"
+      cat build.env
+
+# Generate Release Binaries (push a development/quality/production)
+.generate_pj_release_binaries: &generate_pj_release_binaries
+  script:
+    - !reference [.init_ssh_agent_guardsquare, script]
+    - |
+      # Per-env subdir under RELEASE_DIRECTORY so 7.1/7.2 artifacts land in the
+      # path declared by ${RELEASE_DIRECTORY}/${RELEASE_SUBDIR}/* (matches the
+      # artifact glob used by 7.1 Generate Binary DEV / 7.2 Generate Binary QA
+      # and the find used by 7.3/7.4 upload_application).
+      EFFECTIVE_RELEASE_DIR="${RELEASE_DIRECTORY}${RELEASE_SUBDIR:+/${RELEASE_SUBDIR}}"
+      export EFFECTIVE_RELEASE_DIR
+      if [ -d "${EFFECTIVE_RELEASE_DIR}" ]; then
+        rm -rf "${EFFECTIVE_RELEASE_DIR}" && mkdir -p "${EFFECTIVE_RELEASE_DIR}" && git restore "${EFFECTIVE_RELEASE_DIR}" 2>/dev/null || true
+      else
+        mkdir -p "${EFFECTIVE_RELEASE_DIR}"
+      fi
+    - |
+      echo "This project is marked as '$PIPELINE_PROJECT_OS $PIPELINE_PROJECT_TYPE'"
+      if [[ "${!PIPELINE_PROJECT_PUBLISH_COMMAND}" != "" ]]; then
+        echo "Executing command '${!PIPELINE_PROJECT_PUBLISH_COMMAND}'"
+        bash -c "$(echo ${!PIPELINE_PROJECT_PUBLISH_COMMAND} | xargs)" && echo "execute:SUCCESS" || { echo "execute:FAILURE"; exit 1; }
+      elif [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG ]]; then
+        echo "ERROR: No release command found in publish. Check ci/config.yaml and define it."
+        exit 1
+      else
+        echo "WARN: No publish structure was defined for this application, but no flow exists in pipeline yet for this technology."
+        exit 255
+      fi
+    - !reference [.release_android_library, script]
+    - !reference [.release_android_application, script]

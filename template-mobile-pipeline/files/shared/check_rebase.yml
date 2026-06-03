@@ -1,0 +1,82 @@
+.comment_mr_function:
+  script:
+    - |
+      comment_mr() {
+        local reason="$1"
+        echo "[INFO] Publicando comentario en MR: $reason"
+        curl -s --request POST -k --location \
+          --header "Content-Type: application/json" \
+          --header "Authorization: Bearer $GITLAB_TOKEN" \
+          "https://gitlab.itauchile.cl/api/v4/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID/notes" \
+          --data "{\"body\": \"**Check Rebase Status failed**<br>${reason}<br><br>Pipeline: [#${CI_PIPELINE_ID}](${CI_PIPELINE_URL})\"}" > /dev/null 2>&1
+        echo "[INFO] Comentario publicado"
+      }
+
+.validate_env_vars: &validate_env_vars
+  script:
+    - |
+        if [ -z "$GITLAB_TOKEN" ]; then
+            echo "ERROR: Variable GITLAB_TOKEN no esta configurada"
+            exit 1
+        fi
+
+        if [ -z "$CI_MERGE_REQUEST_IID" ]; then
+            echo "ERROR: Variable CI_MERGE_REQUEST_IID"
+            echo "Este pipeline debe ejecutarse en un Merge Request"
+            exit 1
+        fi
+
+        echo "Variables de entorno validadas"
+
+.get_info_mr: &get_info_mr
+  script:
+    - |
+    - echo "Obteniendo informacion del MR..."
+    - |
+        MR_INFO=$(curl --silent --location --request GET -k --header "Authorization: Bearer $GITLAB_TOKEN" \
+            "https://gitlab.itauchile.cl/api/v4/projects/$CI_PROJECT_ID/merge_requests/$CI_MERGE_REQUEST_IID")
+
+        COMPARE_INFO=$(curl --silent --location --request GET -k --header "Authorization: Bearer $GITLAB_TOKEN" \
+            "https://gitlab.itauchile.cl/api/v4/projects/$CI_PROJECT_ID/repository/compare?from=$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME&to=$CI_MERGE_REQUEST_TARGET_BRANCH_NAME")
+
+        echo "Analizando estado del MR...."
+
+        MR_STATE=$(echo "$MR_INFO" | jq -r '.state // "unknown"')
+        MR_MERGE_STATUS=$(echo "$MR_INFO" | jq -r '.merge_status // "unknown"')
+        HAS_CONFLICTS=$(echo "$MR_INFO" | jq -r '.has_conflicts // false')
+        DETAILED_MERGE_STATUS=$(echo "$MR_INFO" | jq -r '.detailed_merge_status // "unknown"')
+        BLOCKIN_DISCUSSIONS_RESOLVED=$(echo "$MR_INFO" | jq -r '.blocking_discussions_resolved // true')
+
+        BEHIND_COUNT=$(echo "$COMPARE_INFO" | jq -r '.commits | length // 0')
+
+        echo "Estado del MR: $MR_STATE"
+        echo "Estado de Merge: $MR_MERGE_STATUS"
+        echo "Estado detallado: $DETAILED_MERGE_STATUS"
+        echo "Tiene conflictos: $HAS_CONFLICTS"
+        echo "Discusiones bloqueantes resueltas: $BLOCKIN_DISCUSSIONS_RESOLVED"
+
+.verify_conflicts: &verify_conflicts
+  script:
+    - |
+        if [ "$HAS_CONFLICTS" = "true" ]; then
+          echo "ERROR: El MR tiene conflictos de merge"
+          echo ""
+          echo "Resolucion recomendada:"
+          echo "  1. git checkout $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME"
+          echo "  2. git pull origin $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+          echo "  3. Resolver conflictos"
+          echo "  4. git push"
+
+          comment_mr "El MR tiene conflictos de merge entre *${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}* y *${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*.<br>Resuelve los conflictos y vuelve a ejecutar el pipeline."
+          exit 1
+        fi
+
+.verify_behind_commits: &verify_behind_commits
+  script:
+    - |
+        if [ "$BEHIND_COUNT" -gt 0 ] && [ "$DETAILED_MERGE_STATUS" = "not_approved" ]; then
+            echo "ERROR: Rama $BEHIND_COUNT commits atras. Fast forward requerido."
+
+            comment_mr "La rama *${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}* esta $BEHIND_COUNT commits atras de *${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}*.<br>Actualiza tu rama antes de continuar."
+            exit 1
+        fi

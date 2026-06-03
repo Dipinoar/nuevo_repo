@@ -1,0 +1,68 @@
+# =============================================================================
+# Loop de ejecución de scripts parametrizados + mover APKs
+# Requiere: KEY_ALIAS, KEY_PASSWORD, KEY_STORE_PASSWORD, APK_FILTER_NAME, APK_SEARCH_SUBDIR
+# Requiere: .downloads_parametrized_build_google y .downloads_parametrized_build_huawei
+#           ejecutados antes en el mismo job
+# =============================================================================
+.run_parametrized_builds: &run_parametrized_builds
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      echo "[STEP] Running parametrized build scripts"
+      shopt -s nullglob
+      scripts_list=( ./parametrized_build_*.sh )
+      if [ ${#scripts_list[@]} -eq 0 ]; then
+        echo "[WARN] No parametrized_build_*.sh scripts found in $(pwd)"
+      fi
+
+      for script_path in "${scripts_list[@]}"; do
+        script_file="$(basename "${script_path}")"
+
+        case "${script_file}" in
+          *google*) provider_dir="gms" ;;
+          *huawei*) provider_dir="hms" ;;
+          *) echo "[WARN] Unknown provider for ${script_file}. Skipping."; continue ;;
+        esac
+
+        echo "[INFO] Executing ${script_file} (provider=${provider_dir})"
+        if ! bash "${script_path}" "${KEY_ALIAS}" "${KEY_PASSWORD}" "${KEY_STORE_PASSWORD}"; then
+          echo "[ERROR] ${script_file} failed."
+          cat "${ANDROID_PROJECT_PATH}/build.txt" 2>/dev/null || true
+          exit 1
+        fi
+        echo "[INFO] Finished ${script_file}"
+
+        echo "[INFO] Moving APKs (provider=${provider_dir})"
+        search_dirs=(
+          "${APK_ROOT}/${provider_dir}/${APK_SEARCH_SUBDIR:-debug}"
+          "${APK_ROOT}/${provider_dir}"
+        )
+
+        for d in "${search_dirs[@]}"; do
+          [[ -d "$d" ]] || continue
+          find "$d" -type f -name "*${APK_FILTER_NAME:-development}*.apk" -print0 2>/dev/null \
+          | while IFS= read -r -d '' apk; do
+              echo "[INFO] Moving ${apk} -> ${RELEASE_PATH}/"
+              mv -f "${apk}" "${RELEASE_PATH}/"
+            done
+        done
+      done
+      shopt -u nullglob
+
+# Renombrar APKs con sufijo unofficial (solo para PROD unofficial)
+.rename_unofficial_apks: &rename_unofficial_apks
+  script:
+    - |
+      if [[ "${IS_UNOFFICIAL}" == "true" ]]; then
+        echo "[INFO] Renaming production APKs with unofficial suffix"
+        shopt -s nullglob
+        for apk in "${RELEASE_PATH}"/*production*.apk; do
+          base_name="$(basename "${apk}")"
+          new_name="${base_name%.apk}${UNOFFICIAL_PREFIX}.apk"
+          echo "[INFO] Renaming ${base_name} -> ${new_name}"
+          mv -f "${apk}" "${RELEASE_PATH}/${new_name}"
+        done
+        shopt -u nullglob
+      fi

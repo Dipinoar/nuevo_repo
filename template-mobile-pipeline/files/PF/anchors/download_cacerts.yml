@@ -1,0 +1,10 @@
+.download_cacerts: &download_cacerts
+    before_script:
+        - |
+            echo "[INFO] Downloading cacerts truststore..."
+            curl -fL -o cacerts --location --request GET "${PIPELINE_API_REPO_URL}/ci%2Fcacerts/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download cacerts"
+            if [ -f cacerts ]; then
+                echo "[INFO] cacerts downloaded successfully ($(wc -c < cacerts) bytes)"
+            else
+                echo "[WARN] cacerts file not found after download attempt"
+            fi

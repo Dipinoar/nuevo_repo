@@ -1,0 +1,70 @@
+---
+branches: development
+debug: true
+
+plugins:
+  - "@semantic-release/commit-analyzer"
+  - "@semantic-release/release-notes-generator"
+  - "@semantic-release/changelog"
+  - "@semantic-release/git"
+  - "@semantic-release/gitlab"
+  - "@semantic-release/exec"
+
+verifyConditions:
+  - "@semantic-release/git"
+
+analyzeCommits:
+  - path: "@semantic-release/commit-analyzer"
+    releaseRules:
+      - type: feat
+        release: minor
+      - type: fix
+        release: patch
+      - type: feature
+        release: patch
+      - type: hotfix
+        release: patch
+      - type: bugfix
+        release: patch
+      - type: patch
+        release: patch
+      - type: minor
+        release: minor
+      - type: breaking
+        release: major
+      - type: "feat!"
+        release: major
+  - path: "@semantic-release/exec"
+    analyzeCommitsCmd: echo "LAST_APP_VERSION=${lastRelease.version}" >> .lastReleaseEnv
+
+generateNotes:
+  - path: "@semantic-release/release-notes-generator"
+    presetConfig:
+      types:
+        - type: feat
+          section: Features
+        - type: hotfix
+          section: Bug Fixes
+        - type: bugfix
+          section: Bug Fixes
+        - type: fix
+          section: Bug Fixes
+        - type: chore
+          hidden: true
+        - type: docs
+          hidden: true
+        - type: doc
+          hidden: true
+        - type: style
+          hidden: true
+        - type: refactor
+          hidden: true
+        - type: perf
+          hidden: true
+        - type: test
+          hidden: true
+
+prepare:
+  - path: "@semantic-release/git"
+  - path: "@semantic-release/exec"
+    prepareCmd: echo "APP_VERSION=${nextRelease.version}" >> .app_version_sim_env

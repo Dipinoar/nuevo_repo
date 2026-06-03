@@ -1,0 +1,52 @@
+.prebuild_android_application: &prebuild_android_application
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG' project?"
+            if [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG ]]; then
+                echo "[INFO!] Yes."
+
+                git fetch --prune --prune-tags --force
+
+                # Si APP_VERSION es una beta (contiene 'b' seguido de dígitos),
+                # usar directamente sin eliminar el tag existente.
+                if echo "${APP_VERSION:-}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+b[0-9]+$'; then
+                    echo "[INFO] Beta version detected: ${APP_VERSION}"
+                    echo "[INFO] Skipping tag manipulation — using beta tag as-is."
+                    # Asegurar que el tag local exista para que Gradle lo tome
+                    if ! git tag -l "${APP_VERSION}" | grep -q .; then
+                        git tag "${APP_VERSION}"
+                        echo "[INFO] Created local tag '${APP_VERSION}' for Gradle."
+                    fi
+                else
+                    VERSION=$(git tag --contains $(git rev-parse --short HEAD) | cut -d 'v' -f2 | head -n 1)
+                    TAG_VERSION="v${VERSION}"
+
+                    if [[ -z "$VERSION" ]]; then
+                        echo "[INFO!] No version found using git tag. Using semantic version."
+                        git tag "$APP_VERSION"
+                    elif [[ $(git tag -l "${TAG_VERSION}") ]]; then
+                        git tag --delete $TAG_VERSION
+                        git tag "$APP_VERSION"
+                    fi
+                fi
+
+                CURRENT_TAG=$(git describe --tags --abbrev=0)
+                echo "CURRENT_TAG=${CURRENT_TAG}"
+
+                if [[ -n "${MAVEN_USER_DEXGUARD:-}" ]]; then
+                    export ORG_GRADLE_PROJECT_MAVEN_USER_DEXGUARD="${MAVEN_USER_DEXGUARD}"
+                    export ORG_GRADLE_PROJECT_DEXGUARD_USERNAME="${MAVEN_USER_DEXGUARD}"
+                    echo "[INFO] Gradle DexGuard username prepared from MAVEN_USER_DEXGUARD."
+                fi
+
+                if [[ -n "${MAVEN_PASSWORD_DEXGUARD:-}" ]]; then
+                    export ORG_GRADLE_PROJECT_MAVEN_PASSWORD_DEXGUARD="${MAVEN_PASSWORD_DEXGUARD}"
+                    export ORG_GRADLE_PROJECT_DEXGUARD_PASSWORD="${MAVEN_PASSWORD_DEXGUARD}"
+                    echo "[INFO] Gradle DexGuard password prepared from MAVEN_PASSWORD_DEXGUARD."
+                fi
+            else
+                echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG' process."
+            fi

@@ -1,0 +1,24 @@
+# =============================================================================
+# Guardsquare - Anchors for Guardsquare builds (PF Superapp Android)
+#
+# Job variables:
+#   GUARDSQUARE_TYPE  - instrumented | protected
+#   GUARDSQUARE_ENV   - quality | production
+# =============================================================================
+
+.guardsquare_setup: &guardsquare_setup
+  before_script:
+    - !reference [.superapp_android_anchor_compat, before_script]
+    - !reference [.set_java_version, before_script]
+    - !reference [.setup_android_linux_env, before_script]
+    - !reference [.download_cacerts, before_script]
+    - !reference [.superapp_prepare_gradle_cli_compat, before_script]
+    - |
+      curl -fL -o guardsquare_build.sh \
+        "${PIPELINE_API_REPO_URL}/files%2FPF%2Fscripts%2Fguardsquare_build.sh/raw?ref=${PIPELINE_BRANCH}" \
+        --header "Authorization: Bearer $TOKEN_GITLAB"
+      chmod +x guardsquare_build.sh
+
+.guardsquare_run: &guardsquare_run
+  script:
+    - bash ./guardsquare_build.sh "${GUARDSQUARE_TYPE}" "${GUARDSQUARE_ENV}"

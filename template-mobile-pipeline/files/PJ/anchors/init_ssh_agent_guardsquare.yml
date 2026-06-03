@@ -1,0 +1,50 @@
+.init_ssh_agent_guardsquare: &init_ssh_agent_guardsquare
+    script:
+        - |
+            set -Eeo pipefail
+            trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exitcode=$?)" >&2' ERR
+
+            OS_NAME="$(uname -s)"
+            echo "[INFO] Detected OS: ${OS_NAME}"
+
+            if [[ "${OS_NAME}" == "Darwin" ]]; then
+                echo "[INFO!] Is this a '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' project?"
+                if [[ $PIPELINE_PROJECT_OS == $ANDROID_PROJECT_FLAG && $PIPELINE_PROJECT_TYPE == $APPLICATION_PROJECT_FLAG ]]; then
+                    echo "[INFO!] Yes."
+
+                    if [ $(ps ax | grep [s]sh-agent | wc -l) -gt 0 ]; then
+                        # Destroy previous sessions
+                        killall ssh-agent
+                    fi
+
+                    eval $(ssh-agent -s)
+                    if [ "$(ssh-add -l)" == "The agent has no identities." ]; then
+                        CURRENT_DIR=$(pwd)
+                        export PASS="${SSH_GUARDSQUARE_PASS}"
+                        printf '#!/bin/sh\necho "$PASS"\n' > $CURRENT_DIR/askpass.sh
+                        chmod +x $CURRENT_DIR/askpass.sh
+                        SSH_ASKPASS_REQUIRE=force SSH_ASKPASS="$CURRENT_DIR/askpass.sh" ssh-add $SSH_GUARDSQUARE_KEY_MAC
+                    fi
+
+                    trap "ssh-agent -k" exit
+                else
+                    echo "[INFO!] No. Ignoring '$ANDROID_PROJECT_FLAG $APPLICATION_PROJECT_FLAG' process. "
+                fi
+
+            else
+                echo "[DEBUG] Installing SSH client..."
+                if command -v ssh-agent >/dev/null 2>&1 && command -v ssh-add >/dev/null 2>&1; then
+                    echo "[INFO] openssh-client already available. Skipping APT installation."
+                else
+                    apt-get update && apt-get install -y --no-install-recommends openssh-client
+                fi
+
+                echo "[DEBUG] Downloading Python script for Guardsquare Authorization..."
+                curl -fL -o guardsquare_ssh_setup.py --location --request GET "${PIPELINE_API_REPO_URL}/files%2FPJ%2Fscripts%2Fguardsquare_ssh_setup.py/raw?ref=${PIPELINE_BRANCH}" --header "Authorization: Bearer $TOKEN_GITLAB" || echo "[ERROR] Failed to download guardsquare_ssh_setup.py"
+
+                echo "[INFO] Starting ssh-agent..."
+                eval $(ssh-agent -s)
+
+                echo "[INFO] Executing Guardsquare SSH setup script..."
+                SSH_AUTH_SOCK="$SSH_AUTH_SOCK" SSH_AGENT_PID="$SSH_AGENT_PID" python3 guardsquare_ssh_setup.py
+            fi

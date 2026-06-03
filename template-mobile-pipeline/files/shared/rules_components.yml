@@ -1,0 +1,138 @@
+# --- Push en feature/bugfix controlado por variable (para pipelines en ramas de trabajo) ---
+.rules_mr_event: &rules_mr_event
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+# --- Merge Request (flujo progresivo entre ramas principales) ---
+.rules_mr_feature_bugfix_to_development: &rules_mr_feature_bugfix_to_development
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^(feature|bugfix)\/.*$/)'
+
+.rules_mr_to_development: &rules_mr_to_development
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development")'
+
+.rules_mr_development_to_quality: &rules_mr_development_to_quality
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality")'
+
+.rules_mr_hotfix_to_quality: &rules_mr_hotfix_to_quality
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^hotfix\/.*$/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality"'
+
+.rules_mr_quality_to_production: &rules_mr_quality_to_production
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production")'
+
+.rules_mr_unofficial_to_production: &rules_mr_unofficial_to_production
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^unofficial\/.*$/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production")'
+
+.rules_skip_unofficial_to_production: &rules_skip_unofficial_to_production
+  rules:
+    - if: '($CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^unofficial\/.*$/ && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production")'
+      when: never
+
+# --- Commits directos en ramas principales ---
+.rules_commit_development: &rules_commit_development
+  rules:
+    - if: $CI_COMMIT_BRANCH == "development"
+
+.rules_commit_quality: &rules_commit_quality
+  rules:
+    - if: $CI_COMMIT_BRANCH == "quality"
+
+.rules_commit_production: &rules_commit_production
+  rules:
+    - if: $CI_COMMIT_BRANCH == "production"
+
+# --- Tags: evitar ejecuciones desde tags ---
+.rules_skip_on_tag: &rules_skip_on_tag
+  rules:
+    - if: $CI_COMMIT_TAG
+      when: never
+
+# --- Correr solo si hay MR ---
+.rules_require_mr_id: &rules_require_mr_id
+  rules:
+    - if: $CI_MERGE_REQUEST_ID
+
+# --- Instrumented Artifacts (MR title contains "instrumented") ---
+.rules_instrumented_to_development: &rules_instrumented_to_development
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /instrumented/i &&
+            $CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" &&
+            ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/.*$/ ||
+              $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^bugfix\/.*$/)'
+
+.rules_instrumented_hotfix_to_quality: &rules_instrumented_hotfix_to_quality
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /instrumented/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^hotfix\/.*$/'
+
+.rules_instrumented_to_quality: &rules_instrumented_to_quality
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /instrumented/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development"'
+
+.rules_instrumented_to_production: &rules_instrumented_to_production
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /instrumented/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality"'
+
+# --- Protected Artifacts (MR title contains "protected") ---
+.rules_protected_to_development: &rules_protected_to_development
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /protected/i &&
+            $CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" &&
+            ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/.*$/ ||
+              $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^bugfix\/.*$/)'
+
+.rules_protected_hotfix_to_quality: &rules_protected_hotfix_to_quality
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /protected/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^hotfix\/.*$/'
+
+.rules_protected_to_quality: &rules_protected_to_quality
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /protected/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development"'
+
+.rules_protected_to_production: &rules_protected_to_production
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /protected/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality"'
+
+# --- noveracode: skip veracode jobs when "noveracode" is in the MR title ---
+.rules_noveracode_development: &rules_noveracode_development
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+      when: never
+
+.rules_noveracode_quality: &rules_noveracode_quality
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality"'
+      when: never
+
+.rules_noveracode_production: &rules_noveracode_production
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production"'
+      when: never
+
+.rules_noveracode_unofficial: &rules_noveracode_unofficial
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^unofficial\/.*$/'
+      when: never
+
+.rules_noveracode_hotfix: &rules_noveracode_hotfix
+  rules:
+    - if: '$CI_MERGE_REQUEST_TITLE =~ /noveracode/i && $CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^hotfix\/.*$/'
+      when: never
+
+# --- veracodeoff: global kill switch ---
+.rules_veracodeoff: &rules_veracodeoff
+  rules:
+    - if: $veracodeoff == "true"
+      when: never
+
+# --- make_rebase: skip on rebase pipelines ---
+.rules_make_rebase: &rules_make_rebase
+  rules:
+    - if: $MAKE_REBASE == "true"
+      when: never

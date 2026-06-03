@@ -1,0 +1,166 @@
+workflow:
+  rules:
+
+    # 🚫 Nunca ejecutar en tags
+    - if: '$CI_COMMIT_TAG'
+      when: never
+
+    # ✅ Feature / Bugfix manual controlado
+    - if: '($CI_COMMIT_BRANCH =~ /^feature\/.*$/ || $CI_COMMIT_BRANCH =~ /^bugfix\/.*$/) && $RUN_FEATURE_PIPELINE == "true"'
+      when: always
+
+
+    # =====================================================
+    # ✅ MR feature/bugfix → feature/bugfix (NO PROTECTED)
+    # =====================================================
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            (
+              ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/.*$/ || $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^bugfix\/.*$/) &&
+              ($CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /^feature\/.*$/ || $CI_MERGE_REQUEST_TARGET_BRANCH_NAME =~ /^bugfix\/.*$/)
+            )'
+      variables:
+        MERGE_REQUEST_NOT_PROTECTED: "true"
+      when: always
+
+
+    # =====================================================
+    # 🚫 BLOQUEOS DE MERGE REQUEST
+    # =====================================================
+
+    # Bloqueo hacia quality (solo permite development o hotfix/*)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != "development" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME !~ /^hotfix\/.*$/'
+      variables:
+        MERGE_REQUEST_BLOCKED: "true"
+
+    # Bloqueo hacia production (solo permite quality y unofficial)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME != "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME !~ /^unofficial\/.*$/'
+      variables:
+        MERGE_REQUEST_BLOCKED: "true"
+
+    # Bloqueo hacia development (solo feature/bugfix)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" &&
+            ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME !~ /^feature\/.*$/ &&
+              $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME !~ /^bugfix\/.*$/)'
+      variables:
+        MERGE_REQUEST_BLOCKED: "true"
+
+    # =====================================================
+    # ✅ CASOS ESPECIALES
+    # =====================================================
+
+    # MR unofficial → production
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^unofficial\/.*$/'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: ""
+        PACKAGES_MAVEN_NAME_SUFFIX: ""
+        ENVIRONMENT_SUFFIX: "_PRODUCTION"
+        ENVIRONMENT: "production"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        IS_UNOFFICIAL: "true"
+      when: always
+
+    # Rebase automático (usuarios específicos)
+    - if: '($GITLAB_USER_ID == "8971" || $GITLAB_USER_ID == "447") &&
+            $CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${DEV_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+        MAKE_REBASE: "true"
+      when: always
+
+    # =====================================================
+    # ✅ MERGE REQUESTS VÁLIDOS (PROMOCIÓN)
+    # =====================================================
+
+    # feature/bugfix → development
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "development" &&
+            ($CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^feature\/.*$/ ||
+              $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^bugfix\/.*$/)'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${DEV_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${DEV_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_DEVELOPMENT"
+        ENVIRONMENT: "development"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # development → quality
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "development"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${QA_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${QA_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_QUALITY"
+        ENVIRONMENT: "quality"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # hotfix/* → quality
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "quality" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^hotfix\/.*$/'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: "${QA_PREFIX}"
+        PACKAGES_MAVEN_NAME_SUFFIX: "${QA_PREFIX}"
+        ENVIRONMENT_SUFFIX: "_QUALITY"
+        ENVIRONMENT: "quality"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # quality → production
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" &&
+            $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "production" &&
+            $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME == "quality"'
+      variables:
+        PACKAGES_MAVEN_URL_SUFFIX: ""
+        PACKAGES_MAVEN_NAME_SUFFIX: ""
+        ENVIRONMENT_SUFFIX: "_PRODUCTION"
+        ENVIRONMENT: "production"
+        BRANCH: "${CI_MERGE_REQUEST_SOURCE_BRANCH_NAME}"
+        TARGET_BRANCH: "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+      when: always
+
+    # =====================================================
+    # ⚙️ DEFAULT MR
+    # =====================================================
+
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      variables:
+        MERGE_REQUEST_NOT_PROTECTED: "true"
+      when: always
+
+    # =====================================================
+    # ✅ EJECUCIÓN EN DEVELOPMENT
+    # =====================================================
+
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == "development"'
+      when: always
+
+    - if: '$CI_PIPELINE_SOURCE == "web" && $CI_COMMIT_BRANCH == "development"'
+      when: always
+
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CI_COMMIT_BRANCH == "development"'
+      when: always
+
+    # 🚫 Default
+    - when: never

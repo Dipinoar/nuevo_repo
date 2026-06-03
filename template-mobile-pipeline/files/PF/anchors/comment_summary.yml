@@ -1,0 +1,90 @@
+# =============================================================================
+# Comment Summary: recopila URLs de uploads y postea resumen en MR
+# =============================================================================
+
+.resolve_comment_script: &resolve_comment_script
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      if [ -f "$(pwd -P)/gitlab_add_comment.py" ]; then
+        COMMENT_PY="$(pwd -P)/gitlab_add_comment.py"
+      elif [ -f "$(pwd -P)/comment.py" ]; then
+        COMMENT_PY="$(pwd -P)/comment.py"
+      else
+        echo "[ERROR] No se encontró gitlab_add_comment.py ni comment.py"
+        exit 1
+      fi
+      echo "[INFO] Script de comentario: $COMMENT_PY"
+
+.build_artifacts_markdown: &build_artifacts_markdown
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      echo "[INFO] Collecting upload URLs from upstream jobs..."
+
+      # Collect all upload_results_*.env from upstream job artifacts
+      ALL_URLS=""
+      while IFS= read -r -d '' results_file; do
+        echo "[INFO] Found: $results_file"
+        ALL_URLS="${ALL_URLS}$(cat "$results_file")\n"
+      done < <(find . -maxdepth 2 -name "upload_results_*.env" -type f -print0 2>/dev/null) || true
+
+      # Build markdown grouped by version
+      ARTIFACTS_MD=""
+      if [ -n "${ALL_URLS}" ]; then
+        declare -A VERSION_FILES
+        while IFS= read -r url; do
+          [ -z "$url" ] && continue
+          ver=$(echo "$url" | grep -oP "generic/${CI_PROJECT_NAME}/\K[^/]+" || echo "unknown")
+          VERSION_FILES["$ver"]+="${url}\n"
+        done < <(printf "%b" "${ALL_URLS}" | sort -u)
+
+        for ver in $(printf "%s\n" "${!VERSION_FILES[@]}" | sort); do
+          ARTIFACTS_MD+="\n### ${ver}\n"
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            ARTIFACTS_MD+=" - ${url}\n"
+          done < <(printf "%b" "${VERSION_FILES[$ver]}")
+        done
+      fi
+
+      [ -z "${ARTIFACTS_MD}" ] && ARTIFACTS_MD="_No artifacts found_"
+
+      VERSION_TAG="v${APP_VERSION:-${BASE_VERSION:-NOVERSION}}"
+      TAG_URL="${CI_PROJECT_URL}/-/tags/${VERSION_TAG}"
+      TEMPLATE_FILE="${CI_PROJECT_DIR}/mr_artifacts.md"
+
+      echo "[INFO] Preview:"
+      echo -e "${ARTIFACTS_MD}"
+
+.post_comment_to_mr: &post_comment_to_mr
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] Command failed: $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      if [ -z "${CI_MERGE_REQUEST_IID:-}" ]; then
+        echo "[INFO] No es un pipeline de MR. Se omite comentario."
+        exit 0
+      fi
+
+      if [ ! -f "${TEMPLATE_FILE}" ]; then
+        echo "[ERROR] No existe el template: ${TEMPLATE_FILE}"
+        exit 1
+      fi
+
+      python3 "${COMMENT_PY}" \
+        -u "${CI_SERVER_URL}" \
+        -t "${TOKEN_GITLAB}" \
+        -p "${CI_PROJECT_ID}" \
+        -mr "${CI_MERGE_REQUEST_IID}" \
+        -mf "${TEMPLATE_FILE}" \
+        -ml "pipeline-id:${CI_PIPELINE_ID}" \
+            "pipeline-url:${CI_PIPELINE_URL}" \
+            "version:${VERSION_TAG}" \
+            "tag-url:${TAG_URL}" \
+            "artifacts-list:$(printf '%b' "${ARTIFACTS_MD}")"

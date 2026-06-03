@@ -1,0 +1,22 @@
+# Carga de .app_version_env y build.env desde jobs anteriores
+.resolve_env_files: &resolve_env_files
+  script:
+    - |
+      set -Eeo pipefail
+      trap 'echo "[ERROR] $BASH_COMMAND (exit=$?)" >&2' ERR
+
+      echo "[STEP] Resolving env files"
+      if [[ -f build.env && -f .app_version_env ]]; then
+        echo "[INFO] Loading .app_version_env and build.env (dotenv) from previous step"
+        set -a
+        source .app_version_env
+        source build.env
+        set +a
+      fi
+
+      if [[ -z "${APP_VERSION}" ]]; then
+        echo "[ERROR] APP_VERSION is empty. Ensure version jobs publish it (dotenv)."
+        exit 1
+      fi
+
+      echo "[INFO] APP_VERSION = ${APP_VERSION}"
