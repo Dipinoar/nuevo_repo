@@ -5,6 +5,10 @@ default:
     tags:
       - ec2-android
     image: $RUNNER_ANDROID_SECURE
+    cache:
+      paths:
+        - .gradle/wrapper
+        - .gradle/caches
 
 stages:
   - compliance

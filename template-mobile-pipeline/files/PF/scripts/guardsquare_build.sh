@@ -64,8 +64,8 @@ if [[ -n "${MAVEN_USER_DEXGUARD:-}" ]]; then
   export ORG_GRADLE_PROJECT_DEXGUARD_USERNAME="${MAVEN_USER_DEXGUARD}"
 fi
 if [[ -n "${DEXGUARD_MAVEN_PASSWORD:-}" ]]; then
-  export ORG_GRADLE_PROJECT_MAVEN_PASSWORD_DEXGUARD="${MAVEN_PASSWORD_DEXGUARD}"
-  export ORG_GRADLE_PROJECT_DEXGUARD_PASSWORD="${MAVEN_PASSWORD_DEXGUARD}"
+  export ORG_GRADLE_PROJECT_MAVEN_PASSWORD_DEXGUARD="${DEXGUARD_MAVEN_PASSWORD}"
+  export ORG_GRADLE_PROJECT_DEXGUARD_PASSWORD="${DEXGUARD_MAVEN_PASSWORD}"
 fi
 
 # ====== SSH agent for Guardsquare registry ======
@@ -101,19 +101,17 @@ elif [[ "${ENVIRONMENT}" == "production" ]]; then
 fi
 
 # ====== Execute Gradle tasks ======
+GRADLE_ARGS=("${GRADLE_FLAG}" "--no-daemon" "--build-cache")
+
 if [[ "${BUILD_TYPE}" == "instrumented" ]]; then
   OUTPUT_EXT="apk"
-  echo "[STEP] Building instrumented GMS APK..."
-  ./gradlew guardsquareInstrumentGmsApk "${GRADLE_FLAG}"
-  echo "[STEP] Building instrumented HMS APK..."
-  ./gradlew guardsquareInstrumentHmsApk "${GRADLE_FLAG}"
+  echo "[STEP] Building instrumented GMS/HMS APKs..."
+  ./gradlew :app:guardsquareInstrumentGmsApk :app:guardsquareInstrumentHmsApk "${GRADLE_ARGS[@]}"
 
 elif [[ "${BUILD_TYPE}" == "protected" ]]; then
   OUTPUT_EXT="aab"
-  echo "[STEP] Building protected GMS Bundle..."
-  ./gradlew guardsquareProtectGMSBundle "${GRADLE_FLAG}"
-  echo "[STEP] Building protected HMS Bundle..."
-  ./gradlew guardsquareProtectHMSBundle "${GRADLE_FLAG}"
+  echo "[STEP] Building protected GMS/HMS Bundles..."
+  ./gradlew :app:guardsquareProtectGMSBundle :app:guardsquareProtectHMSBundle "${GRADLE_ARGS[@]}"
 fi
 
 # ====== Collect artifacts ======
